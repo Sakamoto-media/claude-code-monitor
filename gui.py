@@ -312,6 +312,13 @@ class MonitorWindow:
         # ドラッグ中フラグ（更新処理の一時停止用）
         self.is_any_card_dragging = False
 
+        # 最前面固定フラグ（デフォルトはTrue）
+        self.always_on_top = True
+        self.root.attributes('-topmost', True)
+
+        # メニューバーを作成
+        self._create_menu_bar()
+
         def _initial_focus():
             if not self._initial_focus_done:
                 self.root.deiconify()
@@ -325,6 +332,30 @@ class MonitorWindow:
         self.session_cards: List[SessionCard] = []
 
         self._build_ui()
+
+    def _create_menu_bar(self):
+        """メニューバーを作成"""
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
+
+        # Viewメニュー
+        view_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="View", menu=view_menu)
+
+        # 最前面固定のチェックボックス
+        self.topmost_var = tk.BooleanVar(value=True)
+        view_menu.add_checkbutton(
+            label="Always on Top",
+            variable=self.topmost_var,
+            command=self._toggle_always_on_top
+        )
+
+    def _toggle_always_on_top(self):
+        """最前面固定を切り替え"""
+        self.always_on_top = self.topmost_var.get()
+        self.root.attributes('-topmost', self.always_on_top)
+        status = "enabled" if self.always_on_top else "disabled"
+        print(f"[WINDOW] Always on top {status}")
 
     def _on_card_reorder(self, session: TerminalSession, direction: str):
         """カードの並び替え"""
