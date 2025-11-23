@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Claude Code Voice Controller - メインアプリケーション
+Claude Code Monitor - メインアプリケーション
 
 複数のTerminal.appタブ/ウィンドウでClaude Codeを実行し、
 音声で操作できるモニタリングシステム
@@ -34,19 +34,49 @@ class ClaudeCodeController:
         self.update_thread = None
         self.update_queue = queue.Queue()  # スレッド間通信用キュー
         self.session_map = {}  # {(window_id, tab_index): TerminalSession} セッション永続化用
+        self.next_display_order = 1  # 次に割り当てるdisplay_order
+        self.force_update_flag = False  # 強制更新フラグ
 
     def start(self):
         """アプリケーションを起動"""
-        print("Starting Claude Code Voice Controller...")
+        print("Starting Claude Code Monitor...")
 
         # 初回のセッション検出
         sessions = self.terminal_monitor.detect_sessions()
         print(f"Found {len(sessions)} terminal sessions")
 
+        # Claude Codeセッションのみ抽出してID順にソート
+        claude_sessions = [s for s in sessions if s.is_running_claude]
+        claude_sessions_sorted = sorted(claude_sessions, key=lambda s: s.window_id)
+        print(f"Claude Code sessions: {len(claude_sessions_sorted)}")
+
+        # 初回のdisplay_orderを割り当て、かつ詳細情報を取得
+        for i, session in enumerate(claude_sessions_sorted, start=1):
+            session.display_order = i
+
+            # analyze_session_statusを呼び出して実際の出力を取得
+            analyzed_session = self.terminal_monitor.analyze_session_status(session)
+
+            # 起動時は必ず要約を生成
+            if analyzed_session.last_output:
+                analyzed_session.summary = self.claude_parser.summarize(analyzed_session.last_output)
+                print(f"  Initial summary generated: {analyzed_session.summary[:50]}...")
+
+            session_key = (analyzed_session.window_id, analyzed_session.tab_index)
+            self.session_map[session_key] = analyzed_session
+            print(f"  Initial session [{i}]: window_id={analyzed_session.window_id}, display_order={analyzed_session.display_order}, output_len={len(analyzed_session.last_output)}")
+
+            # ソート済みリストも更新
+            claude_sessions_sorted[i-1] = analyzed_session
+
+        self.next_display_order = len(claude_sessions_sorted) + 1
+
         # GUIウィンドウを作成
         self.gui_window = MonitorWindow(
             on_session_click=self.on_session_clicked,
-            on_voice_command=self.on_voice_command
+            on_voice_command=self.on_voice_command,
+            on_reorder_complete=self.on_reorder_complete,
+            on_force_update=self.on_force_update
         )
 
         # 音声コマンドハンドラー初期化
@@ -56,7 +86,7 @@ class ClaudeCodeController:
         )
 
         # 初期セッション表示
-        self.gui_window.update_sessions(sessions)
+        self.gui_window.update_sessions(claude_sessions_sorted)
 
         # バックグラウンド更新スレッド開始
         self.is_running = True
@@ -110,6 +140,14 @@ class ClaudeCodeController:
         iteration = 0
         while self.is_running:
             try:
+                # 強制更新フラグがセットされている場合は即座に実行
+                if self.force_update_flag:
+                    print(f"\n[FORCE UPDATE] Executing forced update...")
+                    self.force_update_flag = False
+                else:
+                    # 通常は1秒待機
+                    time.sleep(UPDATE_INTERVAL / 1000)
+
                 iteration += 1
                 print(f"\n[Update {iteration}] Detecting sessions...")
 
@@ -117,34 +155,29 @@ class ClaudeCodeController:
                 new_sessions = self.terminal_monitor.detect_sessions()
                 print(f"  Found {len(new_sessions)} sessions")
 
-                # display_order順にソート（ユーザーがドラッグ&ドロップで並び替えた順序）
-                # display_orderが0の新規セッションは末尾に追加
-                new_sessions_sorted = sorted(new_sessions, key=lambda s: (s.display_order if s.display_order > 0 else 9999, s.window_id, s.tab_index))
-                print(f"  Sorted sessions by display_order:")
-                for i, s in enumerate(new_sessions_sorted):
-                    print(f"    [{i+1}] display_order={s.display_order}, window_id={s.window_id}, tab_index={s.tab_index}, name={s.display_name}")
+                # Claude Codeセッションのみを抽出
+                claude_sessions = [s for s in new_sessions if s.is_running_claude]
+                print(f"  Claude Code sessions: {len(claude_sessions)}")
 
-                # 各セッションの詳細を分析（Claude Codeセッションのみ）
+                # 各セッションの詳細を分析
                 updated_sessions = []
-                for i, new_session in enumerate(new_sessions_sorted):
-                    # Claude Codeセッション以外はスキップ
-                    if not new_session.is_running_claude:
-                        print(f"  Session {i+1}: {new_session.display_name} (Not Claude, skipping)")
-                        continue
-
+                for new_session in claude_sessions:
                     session_key = (new_session.window_id, new_session.tab_index)
 
                     # 既存セッションがあれば再利用
                     if session_key in self.session_map:
                         existing_session = self.session_map[session_key]
-                        print(f"  Session {i+1}: {new_session.display_name} (Claude: {new_session.is_running_claude}) [Reusing existing]")
+                        print(f"  Session: {new_session.display_name} (window_id={new_session.window_id}) [Reusing existing]")
                         # 既存セッションの状態を新セッションに引き継ぐ
                         new_session.previous_output = existing_session.previous_output
                         new_session.summary = existing_session.summary
                         new_session.last_trigger_state = existing_session.last_trigger_state
                         new_session.display_order = existing_session.display_order  # 表示順序も引き継ぐ
                     else:
-                        print(f"  Session {i+1}: {new_session.display_name} (Claude: {new_session.is_running_claude}) [New session]")
+                        # 新規セッション: display_orderを割り当てて末尾に追加
+                        new_session.display_order = self.next_display_order
+                        self.next_display_order += 1
+                        print(f"  Session: {new_session.display_name} (window_id={new_session.window_id}) [New session, display_order={new_session.display_order}]")
 
                     print(f"    Before analysis - Output length: {len(new_session.last_output)}")
 
@@ -159,27 +192,31 @@ class ClaudeCodeController:
                     previous_tail = updated_session.previous_output[-1000:] if len(updated_session.previous_output) > 1000 else updated_session.previous_output
                     output_changed = current_tail != previous_tail
 
+                    # 前回のセッション状態を取得
+                    if session_key in self.session_map:
+                        previous_status = self.session_map[session_key].status
+                    else:
+                        previous_status = None
+
+                    current_status = updated_session.status
+
+                    # 状態がidleまたはwaitingに切り替わった時のみ要約生成
+                    status_changed_to_idle_or_waiting = (
+                        previous_status != current_status and
+                        (current_status == "idle" or current_status == "waiting")
+                    )
+
                     if output_changed:
                         print(f"    Output changed (prev: {len(updated_session.previous_output)} -> now: {len(updated_session.last_output)})")
-                        # 出力を解析して、要約が必要か判定
-                        parsed = self.claude_parser.parse(updated_session.last_output)
 
-                        # 回答完了（入力待ち状態）または選択肢がある場合のみ要約
-                        if parsed.is_waiting_input or len(parsed.options) > 0:
-                            # トリガー状態を文字列化（waiting + 選択肢数の組み合わせ）
-                            current_trigger_state = f"waiting={parsed.is_waiting_input},options={len(parsed.options)}"
-
-                            # 前回と同じトリガー状態なら要約不要
-                            if current_trigger_state == updated_session.last_trigger_state:
-                                print(f"    Trigger state unchanged ({current_trigger_state}), skipping summary")
-                            else:
-                                print(f"    Trigger detected: waiting_input={parsed.is_waiting_input}, options={len(parsed.options)}")
-                                print(f"    Generating summary...")
-                                updated_session.summary = self.claude_parser.summarize(updated_session.last_output)
-                                print(f"    Summary generated: {updated_session.summary[:50]}...")
-                                updated_session.last_trigger_state = current_trigger_state
+                        # 状態がidleまたはwaitingに切り替わった場合のみ要約生成
+                        if status_changed_to_idle_or_waiting:
+                            print(f"    Status changed: {previous_status} -> {current_status}, generating summary...")
+                            updated_session.summary = self.claude_parser.summarize(updated_session.last_output)
+                            print(f"    Summary generated: {updated_session.summary[:50]}...")
+                            updated_session.last_trigger_state = current_status
                         else:
-                            print(f"    No trigger detected (still processing), keeping previous summary")
+                            print(f"    Status: {current_status} (no state change to idle/waiting), keeping previous summary")
 
                         # 前回の出力を更新
                         updated_session.previous_output = updated_session.last_output
@@ -190,22 +227,24 @@ class ClaudeCodeController:
                     self.session_map[session_key] = updated_session
                     updated_sessions.append(updated_session)
 
+                # display_order順にソート
+                updated_sessions_sorted = sorted(updated_sessions, key=lambda s: s.display_order)
+
                 # デバッグ: GUI更新前の最終確認
-                print(f"  Passing {len(updated_sessions)} sessions to GUI queue:")
-                for i, s in enumerate(updated_sessions):
-                    print(f"    [{i+1}] {s.display_name}: output_len={len(s.last_output)}")
+                print(f"  Passing {len(updated_sessions_sorted)} sessions to GUI queue (sorted by display_order):")
+                for i, s in enumerate(updated_sessions_sorted):
+                    print(f"    [{i+1}] display_order={s.display_order}, {s.display_name}: output_len={len(s.last_output)}")
 
                 # キューに更新データを投入（スレッドセーフ）
-                self.update_queue.put(updated_sessions)
+                self.update_queue.put(updated_sessions_sorted)
                 print("  Data added to update queue")
 
             except Exception as e:
                 print(f"Error in update loop: {e}")
                 import traceback
                 traceback.print_exc()
-
-            # 次の更新まで待機
-            time.sleep(UPDATE_INTERVAL / 1000)
+                # エラー時も待機を継続
+                time.sleep(UPDATE_INTERVAL / 1000)
 
     def on_session_clicked(self, session: TerminalSession):
         """セッションがクリックされたときの処理"""
@@ -271,6 +310,22 @@ class ClaudeCodeController:
         # 音声認識開始
         self.voice_handler.start()
 
+    def on_reorder_complete(self, sessions: List[TerminalSession]):
+        """GUIでカードの並び替えが完了したときの処理"""
+        print(f"\n[REORDER] ===== on_reorder_complete called =====")
+        # session_mapのdisplay_orderを更新
+        for session in sessions:
+            session_key = (session.window_id, session.tab_index)
+            if session_key in self.session_map:
+                self.session_map[session_key].display_order = session.display_order
+                print(f"  Updated session_map: {session.display_name}, display_order={session.display_order}")
+        print(f"[REORDER] ===== on_reorder_complete done =====\n")
+
+    def on_force_update(self):
+        """GUIから強制更新を要求されたときの処理"""
+        print(f"\n[FORCE UPDATE] Force update requested")
+        self.force_update_flag = True
+
 
 def check_dependencies():
     """必要な依存関係をチェック"""
@@ -303,7 +358,7 @@ def check_dependencies():
 def main():
     """メインエントリーポイント"""
     print("=" * 50)
-    print("Claude Code Voice Controller")
+    print("Claude Code Monitor")
     print("=" * 50)
     print()
 

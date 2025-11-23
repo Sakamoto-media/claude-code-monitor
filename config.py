@@ -5,10 +5,10 @@ import os
 from pathlib import Path
 
 # アプリケーション設定
-APP_NAME = "Claude Code Voice Controller"
+APP_NAME = "Claude Code Monitor"
 WINDOW_WIDTH = 350
 WINDOW_HEIGHT = 800
-UPDATE_INTERVAL = 2000  # ミリ秒（2秒ごとに更新）
+UPDATE_INTERVAL = 1000  # ミリ秒（1秒ごとに更新）
 
 # 音声設定
 VOICE_LANGUAGE = "ja-JP"  # 日本語

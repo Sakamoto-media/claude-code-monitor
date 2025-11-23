@@ -231,8 +231,86 @@ class ClaudeOutputParser:
 
         return summary if summary else "処理中です。"
 
+    def _remove_current_user_input_area(self, text: str) -> str:
+        """
+        現在のユーザー入力エリア（─────で囲まれた範囲）を除外
+
+        パターン:
+        ─────────────────────────────────────────────────────────────────
+        > ユーザーの入力がここに来る
+        ─────────────────────────────────────────────────────────────────
+        """
+        lines = text.split('\n')
+
+        # 下から走査して、─────のペアを見つける
+        separator_indices = []
+        for i, line in enumerate(lines):
+            if '─' * 10 in line:  # 10文字以上の─────があれば区切り線と判定
+                separator_indices.append(i)
+
+        if len(separator_indices) >= 2:
+            # 最後から2番目の区切り線より前までを使用（最後のユーザー入力ブロックを除外）
+            last_separator = separator_indices[-2]
+            filtered_lines = lines[:last_separator]
+            return '\n'.join(filtered_lines)
+
+        # 区切り線が見つからない場合は元のまま返す
+        return text
+
+    def _remove_previous_user_input(self, text: str) -> str:
+        """
+        前回のユーザー指示内容を除外（'>'で始まる段落を最後から検索して削除）
+
+        注意: 現在のユーザー入力エリアを削除してから検索すること
+
+        パターン:
+        > ユーザーの前回の指示
+        複数行続く場合もある
+
+        空行
+
+        Claudeの応答...  ← この部分のみを要約対象にする
+        """
+        # まず現在のユーザー入力エリアを削除
+        text = self._remove_current_user_input_area(text)
+
+        lines = text.split('\n')
+
+        # 下から走査して、'>'で始まる行を探す
+        last_user_input_start = -1
+        for i in range(len(lines) - 1, -1, -1):
+            stripped = lines[i].strip()
+            if stripped.startswith('>'):
+                last_user_input_start = i
+                break
+
+        if last_user_input_start == -1:
+            # '>'で始まる行が見つからない場合は元のまま返す
+            return text
+
+        # '>'で始まる行より後ろから、最初の空行より後ろを使用
+        remaining_lines = lines[last_user_input_start + 1:]
+
+        # 最初の空行を探す
+        first_empty_line = -1
+        for i, line in enumerate(remaining_lines):
+            if not line.strip():
+                first_empty_line = i
+                break
+
+        if first_empty_line != -1:
+            # 空行より後ろを返す
+            filtered_lines = remaining_lines[first_empty_line + 1:]
+            return '\n'.join(filtered_lines)
+        else:
+            # 空行が見つからない場合は'>'の行より後ろ全てを返す
+            return '\n'.join(remaining_lines)
+
     def _summarize_with_api(self, text: str, max_length: int = 200) -> str:
         """Claude APIを使ってテキストを要約"""
+        # 前回のユーザー指示内容を除外
+        text = self._remove_previous_user_input(text)
+
         # 入力テキストが長すぎる場合は最新部分のみを使用
         if len(text) > 10000:
             text = text[-10000:]

@@ -7,21 +7,23 @@ from typing import List, Callable, Optional
 from datetime import datetime
 import threading
 
-from config import COLORS, WINDOW_WIDTH, WINDOW_HEIGHT, UPDATE_INTERVAL
+from config import COLORS, WINDOW_WIDTH, WINDOW_HEIGHT, UPDATE_INTERVAL, APP_NAME
 from terminal_monitor import TerminalSession
 
 
 class SessionCard(tk.Frame):
     """各セッションを表示するカード"""
 
-    def __init__(self, parent, session: TerminalSession, on_click: Callable, on_reorder: Callable = None):
+    def __init__(self, parent, session: TerminalSession, on_click: Callable, on_reorder: Callable = None, monitor_window=None):
         # 外側フレーム = 枠の色（ネストフレーム方式）
         super().__init__(parent, bg="#3a3a3a", bd=0, relief=tk.FLAT)
         self.session = session
         self.on_click = on_click
         self.on_reorder = on_reorder  # ドラッグ&ドロップによる並び替えコールバック
+        self.monitor_window = monitor_window  # MonitorWindowへの参照
         self.border_frame = self  # 外側フレーム（枠の色用）
         self.drag_start_y = 0  # ドラッグ開始位置
+        self.is_dragging = False  # ドラッグ中フラグ
 
         print(f"[DEBUG] SessionCard.__init__: {session.display_name}, status={session.status}")
 
@@ -42,8 +44,8 @@ class SessionCard(tk.Frame):
         header_frame = tk.Frame(self.content_frame, bg=COLORS["bg"])
         header_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        # セッション名（タブ名 + ウィンドウ/タブ番号 + 固有ID）
-        display_text = f"{self.session.display_name} [W:{self.session.window_id}/T:{self.session.tab_index}]"
+        # セッション名（タブ名 + ウィンドウID）
+        display_text = f"{self.session.display_name} [{self.session.window_id}]"
         self.name_label = tk.Label(
             header_frame,
             text=display_text,
@@ -76,7 +78,7 @@ class SessionCard(tk.Frame):
 
         self.output_text = scrolledtext.ScrolledText(
             output_frame,
-            font=("Courier", 10),
+            font=("Courier", 8),
             fg="#cccccc",
             bg="#2a2a2a",
             wrap=tk.WORD,
@@ -91,11 +93,11 @@ class SessionCard(tk.Frame):
         self._update_output_display()
         print(f"    SessionCard created for {self.session.display_name}")
 
-        # 更新時刻
-        time_str = self.session.last_updated.strftime("%H:%M:%S")
+        # 状態表示（Updatedは表示しない）
+        status_text = f"Status: {self.session.status}"
         self.time_label = tk.Label(
             self.content_frame,
-            text=f"Updated: {time_str}",
+            text=status_text,
             font=("Arial", 8),
             fg="#888888",
             bg=COLORS["bg"],
@@ -103,88 +105,76 @@ class SessionCard(tk.Frame):
         )
         self.time_label.pack(fill=tk.X, padx=10, pady=2)
 
-        # ホバー効果
-        self._bind_hover_effects()
-
     def _bind_click_events(self):
         """クリックイベントを全ての子ウィジェットにバインド"""
-        def handle_click(e):
-            print(f"\n[GUI-CLICK] ===== Click event fired! =====")
-            print(f"[GUI-CLICK] Session: {self.session.display_name}")
-            print(f"[GUI-CLICK] Widget: {e.widget.__class__.__name__}")
-            print(f"[GUI-CLICK] Calling on_click callback...")
+        # クリックイベントは_bind_drag_eventsで統合処理するため、ここでは何もしない
+        pass
 
-            try:
-                self.on_click(self.session)
-                print(f"[GUI-CLICK] on_click callback completed")
-            except Exception as ex:
-                print(f"[GUI-CLICK] ERROR in on_click: {ex}")
-                import traceback
-                traceback.print_exc()
+    def _bind_drag_events(self):
+        """ドラッグ&ドロップとクリックイベントを統合バインド"""
+        def on_press(event):
+            self.drag_start_y = event.y_root
+            self.is_dragging = False
+            print(f"[INPUT] Button press on {self.session.display_name} at y={event.y_root}")
 
-            print(f"[GUI-CLICK] ===== Click handling done =====\n")
-            # イベント伝播を継続（return "break"しない）
+        def on_motion(event):
+            delta_y = event.y_root - self.drag_start_y
+            if abs(delta_y) > 5:  # 5ピクセル以上移動したらドラッグ開始
+                if not self.is_dragging:
+                    self.is_dragging = True
+                    if self.monitor_window:
+                        self.monitor_window.is_any_card_dragging = True
+                    print(f"[DRAG] Start dragging {self.session.display_name}, update paused")
+                self.config(cursor="hand2")
 
-        # 再帰的に全てのウィジェットにバインド
-        def bind_recursive(widget, depth=0):
-            indent = "  " * depth
+        def on_release(event):
+            delta_y = event.y_root - self.drag_start_y
+            print(f"[INPUT] Button release on {self.session.display_name}, delta_y={delta_y}, is_dragging={self.is_dragging}")
+
+            if self.is_dragging:
+                # ドラッグ処理
+                self.config(cursor="")
+                if abs(delta_y) > 20 and self.on_reorder:
+                    direction = "up" if delta_y < 0 else "down"
+                    print(f"[DRAG] Reordering {direction}")
+                    self.on_reorder(self.session, direction)
+                self.is_dragging = False
+                if self.monitor_window:
+                    self.monitor_window.is_any_card_dragging = False
+                    print(f"[DRAG] End dragging, update resumed")
+            else:
+                # クリック処理（移動距離が小さい場合）
+                print(f"[CLICK] Detected click on {self.session.display_name}")
+                try:
+                    self.on_click(self.session)
+                    print(f"[CLICK] on_click callback completed")
+                except Exception as ex:
+                    print(f"[CLICK] ERROR in on_click: {ex}")
+                    import traceback
+                    traceback.print_exc()
+
+        # 再帰的に全てのウィジェットにイベントをバインド
+        def bind_recursive(widget):
             widget_class = widget.__class__.__name__
 
-            # ScrolledTextとScrollbarはスキップ（スクロール機能と競合するため）
-            if widget_class in ["ScrolledText", "Scrollbar"]:
-                print(f"{indent}[DEBUG] Skipping {widget_class} (has own click handlers)")
+            # Scrollbarのみスキップ（スクロール操作のため）
+            # ScrolledTextにはバインドして、クリック＆ドラッグを有効にする
+            if widget_class == "Scrollbar":
                 return
 
-            print(f"{indent}[DEBUG] Binding click to: {widget_class} (widget={widget})")
-            widget.bind("<Button-1>", handle_click)
+            widget.bind("<ButtonPress-1>", on_press)
+            widget.bind("<B1-Motion>", on_motion)
+            widget.bind("<ButtonRelease-1>", on_release)
 
             # 子ウィジェットに再帰
             try:
                 for child in widget.winfo_children():
-                    bind_recursive(child, depth + 1)
+                    bind_recursive(child)
             except:
-                pass  # winfo_children()が使えないウィジェット
+                pass
 
-        print(f"[DEBUG] _bind_click_events called for {self.session.display_name}")
-        # 自分自身（外側フレーム）から再帰的にバインド
+        # カード全体にバインド
         bind_recursive(self)
-
-    def _bind_hover_effects(self):
-        """ホバーエフェクトをバインド"""
-        def on_enter(e):
-            self.config(bg=COLORS["highlight"])
-
-        def on_leave(e):
-            self.config(bg=COLORS["bg"])
-
-        self.bind("<Enter>", on_enter)
-        self.bind("<Leave>", on_leave)
-
-    def _bind_drag_events(self):
-        """ドラッグ&ドロップイベントをバインド"""
-        def on_drag_start(event):
-            self.drag_start_y = event.y_root
-            print(f"[DRAG] Start dragging {self.session.display_name} at y={event.y_root}")
-
-        def on_drag_motion(event):
-            # ドラッグ中の視覚フィードバック（カードを半透明にするなど）
-            delta_y = event.y_root - self.drag_start_y
-            if abs(delta_y) > 5:  # 5ピクセル以上移動したらドラッグ中
-                self.config(cursor="hand2")
-
-        def on_drag_end(event):
-            self.config(cursor="")
-            delta_y = event.y_root - self.drag_start_y
-            print(f"[DRAG] End dragging {self.session.display_name}, delta_y={delta_y}")
-
-            if abs(delta_y) > 20 and self.on_reorder:  # 20ピクセル以上移動したら並び替え
-                direction = "up" if delta_y < 0 else "down"
-                self.on_reorder(self.session, direction)
-
-        # ヘッダー部分だけをドラッグ可能に（タイトルバー的な操作）
-        self.name_label.bind("<ButtonPress-1>", on_drag_start)
-        self.name_label.bind("<B1-Motion>", on_drag_motion)
-        self.name_label.bind("<ButtonRelease-1>", on_drag_end)
 
     def _update_border_color(self):
         """状態に応じた枠の色を設定"""
@@ -223,6 +213,14 @@ class SessionCard(tk.Frame):
         if self.session.summary:
             # Claude APIで生成された要約を使用
             summary_text = self.session.summary
+
+            # 要約に改行を追加して読みやすくする
+            # 句点（。）の後に改行を入れる
+            summary_text = summary_text.replace('。', '。\n')
+
+            # 末尾の余分な改行を削除
+            summary_text = summary_text.strip()
+
             print(f"    Summary mode (API): {self.session.display_name}, showing API summary")
         else:
             # フォールバック：要約がない場合は簡易サマリー
@@ -271,8 +269,8 @@ class SessionCard(tk.Frame):
         print(f"  Old: window_id={old_window_id}, tab_index={old_tab_index}, status={old_status}")
         print(f"  New: window_id={session.window_id}, tab_index={session.tab_index}, status={session.status}")
 
-        # 各要素を更新（ウィンドウ/タブ番号 + 固有ID）
-        display_text = f"{session.display_name} [W:{session.window_id}/T:{session.tab_index}]"
+        # 各要素を更新（ウィンドウID）
+        display_text = f"{session.display_name} [{session.window_id}]"
         self.name_label.config(text=display_text)
 
         # 枠の色を更新（状態に応じて）
@@ -281,8 +279,9 @@ class SessionCard(tk.Frame):
         # 表示モードに応じて出力を更新
         self._update_output_display()
 
-        time_str = session.last_updated.strftime("%H:%M:%S")
-        self.time_label.config(text=f"Updated: {time_str}")
+        # 状態表示を更新（Updatedは表示しない）
+        status_text = f"Status: {session.status}"
+        self.time_label.config(text=status_text)
 
         # クリックイベントを再バインド（更新後も確実にクリック可能に）
         self._bind_click_events()
@@ -292,13 +291,15 @@ class SessionCard(tk.Frame):
 class MonitorWindow:
     """メインモニタリングウィンドウ"""
 
-    def __init__(self, on_session_click: Callable, on_voice_command: Optional[Callable] = None):
+    def __init__(self, on_session_click: Callable, on_voice_command: Optional[Callable] = None, on_reorder_complete: Optional[Callable] = None, on_force_update: Optional[Callable] = None):
         self.root = tk.Tk()
-        self.root.title("Claude Code Voice Controller")
+        self.root.title(APP_NAME)
         self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
         self.root.configure(bg=COLORS["bg"])
         self.on_session_click = on_session_click
         self.on_voice_command = on_voice_command
+        self.on_reorder_complete = on_reorder_complete
+        self.on_force_update = on_force_update
 
         # macOS Tk 9.0バグ回避: ウィンドウを一旦非表示にしてから表示
         # マウスポインタがウィンドウ内にある状態で表示されると、キーウィンドウになれない
@@ -306,6 +307,9 @@ class MonitorWindow:
 
         # 初回表示時のみフォーカスを取得（その後は奪わない）
         self._initial_focus_done = False
+
+        # ドラッグ中フラグ（更新処理の一時停止用）
+        self.is_any_card_dragging = False
 
         def _initial_focus():
             if not self._initial_focus_done:
@@ -355,6 +359,15 @@ class MonitorWindow:
             card.pack_forget()
         for card in self.session_cards:
             card.pack(fill=tk.X, pady=5, padx=5)
+
+        # main.pyのsession_mapを更新するコールバックを呼び出す
+        if self.on_reorder_complete:
+            sessions = [card.session for card in self.session_cards]
+            self.on_reorder_complete(sessions)
+
+        # ドロップ直後に画面を即座に更新（2回連続ドラッグ対策）
+        # 100ms後に強制更新をトリガー
+        self.root.after(100, self._force_update_after_reorder)
 
     def _build_ui(self):
         """UIを構築"""
@@ -439,6 +452,11 @@ class MonitorWindow:
 
     def update_sessions(self, sessions: List[TerminalSession]):
         """セッションリストを更新（既存カードを再利用し、順序を保持）"""
+        # ドラッグ中は更新をスキップ
+        if self.is_any_card_dragging:
+            print(f"  MonitorWindow.update_sessions SKIPPED (dragging in progress)")
+            return
+
         print(f"  MonitorWindow.update_sessions called with {len(sessions)} sessions")
         for i, s in enumerate(sessions):
             print(f"    Session {i+1}: {s.display_name}, window_id={s.window_id}, tab_index={s.tab_index}, output_len={len(s.last_output)}")
@@ -463,7 +481,8 @@ class MonitorWindow:
                     self.scrollable_frame,
                     session,
                     self.on_session_click,
-                    self._on_card_reorder
+                    self._on_card_reorder,
+                    monitor_window=self
                 )
                 new_cards.append(card)
                 print(f"    Created new card: {session.display_name}")
@@ -494,27 +513,15 @@ class MonitorWindow:
         self.scrollable_frame.update_idletasks()
 
     def show_notification(self, message: str, type: str = "info"):
-        """通知を表示"""
-        colors = {
-            "info": COLORS["highlight"],
-            "success": COLORS["active"],
-            "error": COLORS["error"],
-            "warning": COLORS["waiting"]
-        }
+        """通知を表示（無効化済み）"""
+        # 通知表示を無効化
+        pass
 
-        notification = tk.Label(
-            self.root,
-            text=message,
-            font=("Arial", 10),
-            fg=COLORS["fg"],
-            bg=colors.get(type, COLORS["highlight"]),
-            padx=10,
-            pady=5
-        )
-        notification.place(relx=0.5, rely=0.9, anchor="center")
-
-        # 3秒後に消去
-        self.root.after(3000, notification.destroy)
+    def _force_update_after_reorder(self):
+        """ドロップ後に強制的に画面更新を実行"""
+        print("[REORDER] Forcing update after reorder")
+        if self.on_force_update:
+            self.on_force_update()
 
     def run(self):
         """GUIを起動"""

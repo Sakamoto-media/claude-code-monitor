@@ -303,56 +303,109 @@ class TerminalMonitor:
             print(f"[DEBUG] analyze_session_status: {session.display_name} -> idle (no content)")
             return session
 
-        # 状態判定ロジック（Claude Codeの実際の出力パターンに基づく）
-        # 最新の15行をチェック（実行インジケーターを確実に捕捉）
-        lines = content.split('\n')
-        recent_lines = lines[-15:] if len(lines) > 15 else lines
-        recent_content = '\n'.join(recent_lines)
+        # 選択肢チェック: ユーザー入力エリアの下部（削除される部分）に選択肢があるかチェック
+        has_options = self._check_for_options(content)
 
-        # activeの判定: Claude Codeが実行中（最新の数行のみでチェック）
-        # ⏺ と ⎿ は実行中の明確なインジケーターなので、最新5行にあるかチェック
-        active_indicators = ['⏺', '⎿']
+        # ユーザー入力エリア（─────で囲まれた範囲）を除外
+        content_for_analysis = self._remove_user_input_area(content)
 
-        # Tool実行中のパターン（recent_contentのみでチェック）
-        tool_patterns = [
-            'Tool ran',
-            'Read(',
-            'Edit(',
-            'Write(',
-            'Bash(',
-            'Glob(',
-            'Grep(',
-            'Task(',
-        ]
+        # 判定には最下部10行のみを使用
+        lines = content_for_analysis.split('\n')
+        last_10_lines = lines[-10:] if len(lines) >= 10 else lines
 
-        # waitingの判定: 入力待ち
-        waiting_patterns = ['?', 'select', 'choose', 'which', 'option']
+        # 全文を使用（先頭15文字の制限なし）
+        analysis_text = '\n'.join(last_10_lines)
 
-        # デバッグ：チェック対象の内容を表示
-        print(f"[DEBUG] Checking recent_content (last {len(recent_lines)} lines, {len(recent_content)} chars):")
-        print(f"  Recent content: {recent_content!r}")
+        print(f"[DEBUG] analyze_session_status: {session.display_name}")
+        print(f"  Last 10 lines: {analysis_text!r}")
 
-        # アクティブインジケーターをチェック（最新15行）
-        found_indicators = [p for p in active_indicators if p in recent_content]
-        found_tools = [p for p in tool_patterns if p in recent_content]
+        # 実行中を示す文言のチェック
+        has_active_keyword = '(esc to interrupt' in analysis_text
 
-        if found_indicators or found_tools:
+        # 状態判定
+        # 緑（active）: "(esc to interrupt" が存在
+        # 黄（waiting）: 選択肢が存在
+        # グレー（idle）: それ以外
+
+        # 選択肢がある場合は優先的にwaiting判定
+        if has_options:
+            session.status = "waiting"  # 選択肢あり
+            print(f"  -> waiting (found options in input area)")
+        elif has_active_keyword:
             session.status = "active"  # 実行中
-            print(f"[DEBUG] analyze_session_status: {session.display_name} -> active")
-            print(f"  Indicators: {found_indicators}, Tools: {found_tools}")
-        elif any(keyword in recent_content.lower() for keyword in waiting_patterns) or "?" in recent_content:
-            session.status = "waiting"  # 選択待ち
-            print(f"[DEBUG] analyze_session_status: {session.display_name} -> waiting")
+            print(f"  -> active (found active keyword)")
         else:
-            session.status = "idle"
-            print(f"[DEBUG] analyze_session_status: {session.display_name} -> idle (no active patterns in recent output)")
-
-        # Todo進捗の抽出（簡易版）
-        todo_match = re.search(r'(\d+)/(\d+)\s*(completed|tasks?)', content, re.IGNORECASE)
-        if todo_match:
-            session.todo_progress = f"{todo_match.group(1)}/{todo_match.group(2)} completed"
+            session.status = "idle"  # それ以外
+            print(f"  -> idle (no indicators)")
 
         return session
+
+    def _check_for_options(self, content: str) -> bool:
+        """
+        最後の区切り線（─────）の直後に選択肢（1. 2. など）があるかチェック
+
+        "1. "と"2. "の両方が含まれている場合のみTrueを返す
+
+        構造（選択肢状態ではユーザー入力エリアの2本目の区切り線が消える）:
+        ─────────────────────  ← 最後の区切り線
+        選択肢:                 ← この部分全体をチェック
+         1. Yes
+         2. No
+
+        Returns:
+            True: "1. "と"2. "の両方が見つかった
+            False: 選択肢が見つからなかった、または片方のみ
+        """
+        lines = content.split('\n')
+
+        # 下から走査して、─────を見つける
+        separator_indices = []
+        for i, line in enumerate(lines):
+            if '─' * 10 in line:  # 10文字以上の─────があれば区切り線と判定
+                separator_indices.append(i)
+
+        if len(separator_indices) >= 1:
+            # 最後の区切り線より後の全てを取得
+            last_separator_end = separator_indices[-1]
+            options_area_lines = lines[last_separator_end + 1:]
+
+            # 選択肢エリア全体を1つの文字列に結合
+            options_text = '\n'.join(options_area_lines)
+
+            # "1. "と"2. "の両方が含まれているかチェック
+            has_option_1 = '1. ' in options_text
+            has_option_2 = '2. ' in options_text
+
+            return has_option_1 and has_option_2
+
+        return False
+
+    def _remove_user_input_area(self, content: str) -> str:
+        """
+        一番下からユーザー入力エリア（─────で囲まれた範囲）を除外
+
+        パターン:
+        ─────────────────────────────────────────────────────────────────
+        > ユーザーの入力がここに来る
+        ─────────────────────────────────────────────────────────────────
+        """
+        # 一番下から最初の─────ブロックを見つけて、それ以降を除外
+        lines = content.split('\n')
+
+        # 下から走査して、─────のペアを見つける
+        separator_indices = []
+        for i, line in enumerate(lines):
+            if '─' * 10 in line:  # 10文字以上の─────があれば区切り線と判定
+                separator_indices.append(i)
+
+        if len(separator_indices) >= 2:
+            # 最後から2番目の区切り線より前までを使用（最後のユーザー入力ブロックを除外）
+            last_separator = separator_indices[-2]
+            filtered_lines = lines[:last_separator]
+            return '\n'.join(filtered_lines)
+
+        # 区切り線が見つからない場合は元のまま返す
+        return content
 
 
 if __name__ == "__main__":
