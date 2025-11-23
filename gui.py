@@ -7,6 +7,8 @@ from tkinter import ttk, scrolledtext
 from typing import List, Callable, Optional
 from datetime import datetime
 import threading
+import subprocess
+import os
 
 from config import COLORS, WINDOW_WIDTH, WINDOW_HEIGHT, UPDATE_INTERVAL, APP_NAME
 from terminal_monitor import TerminalSession
@@ -251,11 +253,33 @@ class SessionCard(tk.Frame):
             summary_text = '\n'.join(summary_parts)
             print(f"    Summary mode (fallback): {self.session.display_name}, showing fallback summary")
 
+        # 行数制限を適用
+        summary_text = self._truncate_to_lines(summary_text)
+
         self.output_text.insert("1.0", summary_text)
 
         # 最下部にスクロール
         self.output_text.see(tk.END)
         self.output_text.config(state=tk.DISABLED)
+
+    def _truncate_to_lines(self, text: str) -> str:
+        """テキストを指定行数に制限"""
+        if not self.monitor_window:
+            return text
+
+        max_lines = self.monitor_window.summary_max_lines
+        lines = text.split('\n')
+
+        if len(lines) <= max_lines:
+            return text
+
+        # 制限を超える場合は最大行数まで表示し、"..."を追加
+        truncated_lines = lines[:max_lines]
+        return '\n'.join(truncated_lines) + '\n...'
+
+    def update_summary_display(self):
+        """要約表示を更新（行数制限変更時に使用）"""
+        self._update_output_display()
 
     def update_session(self, session: TerminalSession):
         """セッション情報を更新"""
@@ -316,6 +340,17 @@ class MonitorWindow:
         self.always_on_top = True
         self.root.attributes('-topmost', True)
 
+        # 音声読み上げ設定
+        self.tts_mode = "none"  # "none", "apple", "voicevox"
+        self.tts_include_summary = True  # 要約まで読み上げるか
+        self.tts_speed = 1.0  # 読み上げ速度（0.5〜2.0）
+        self.tts_process = None  # 現在の読み上げプロセス
+        self.tts_thread = None  # 読み上げスレッド
+        self.tts_stop_flag = False  # 読み上げ中断フラグ
+
+        # 要約表示設定
+        self.summary_max_lines = 3  # 要約の最大行数（1〜10）
+
         # メニューバーを作成
         self._create_menu_bar()
 
@@ -350,12 +385,268 @@ class MonitorWindow:
             command=self._toggle_always_on_top
         )
 
+        view_menu.add_separator()
+
+        # 要約の最大行数
+        summary_lines_menu = tk.Menu(view_menu, tearoff=0)
+        view_menu.add_cascade(label="Summary Max Lines", menu=summary_lines_menu)
+
+        self.summary_max_lines_var = tk.IntVar(value=3)
+        for lines in [1, 2, 3, 4, 5, 6, 8, 10]:
+            summary_lines_menu.add_radiobutton(
+                label=f"{lines} line{'s' if lines > 1 else ''}",
+                variable=self.summary_max_lines_var,
+                value=lines,
+                command=self._set_summary_max_lines
+            )
+
+        # Audioメニュー
+        audio_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Audio", menu=audio_menu)
+
+        # 読み上げモード選択
+        self.tts_mode_var = tk.StringVar(value="none")
+        audio_menu.add_radiobutton(
+            label="No Speech",
+            variable=self.tts_mode_var,
+            value="none",
+            command=self._set_tts_mode
+        )
+        audio_menu.add_radiobutton(
+            label="Apple TTS",
+            variable=self.tts_mode_var,
+            value="apple",
+            command=self._set_tts_mode
+        )
+        audio_menu.add_radiobutton(
+            label="VOICEVOX (Zundamon)",
+            variable=self.tts_mode_var,
+            value="voicevox",
+            command=self._set_tts_mode
+        )
+
+        audio_menu.add_separator()
+
+        # 要約読み上げのチェックボックス
+        self.tts_summary_var = tk.BooleanVar(value=True)
+        audio_menu.add_checkbutton(
+            label="Include Summary",
+            variable=self.tts_summary_var,
+            command=self._toggle_tts_summary
+        )
+
+        audio_menu.add_separator()
+
+        # 読み上げ速度
+        speed_menu = tk.Menu(audio_menu, tearoff=0)
+        audio_menu.add_cascade(label="Speed", menu=speed_menu)
+
+        self.tts_speed_var = tk.DoubleVar(value=1.0)
+        speed_menu.add_radiobutton(
+            label="0.5x (Slow)",
+            variable=self.tts_speed_var,
+            value=0.5,
+            command=self._set_tts_speed
+        )
+        speed_menu.add_radiobutton(
+            label="0.75x",
+            variable=self.tts_speed_var,
+            value=0.75,
+            command=self._set_tts_speed
+        )
+        speed_menu.add_radiobutton(
+            label="1.0x (Normal)",
+            variable=self.tts_speed_var,
+            value=1.0,
+            command=self._set_tts_speed
+        )
+        speed_menu.add_radiobutton(
+            label="1.25x",
+            variable=self.tts_speed_var,
+            value=1.25,
+            command=self._set_tts_speed
+        )
+        speed_menu.add_radiobutton(
+            label="1.5x",
+            variable=self.tts_speed_var,
+            value=1.5,
+            command=self._set_tts_speed
+        )
+        speed_menu.add_radiobutton(
+            label="2.0x (Fast)",
+            variable=self.tts_speed_var,
+            value=2.0,
+            command=self._set_tts_speed
+        )
+
     def _toggle_always_on_top(self):
         """最前面固定を切り替え"""
         self.always_on_top = self.topmost_var.get()
         self.root.attributes('-topmost', self.always_on_top)
         status = "enabled" if self.always_on_top else "disabled"
         print(f"[WINDOW] Always on top {status}")
+
+    def _set_tts_mode(self):
+        """読み上げモードを設定"""
+        self.tts_mode = self.tts_mode_var.get()
+        print(f"[TTS] Mode set to: {self.tts_mode}")
+
+    def _toggle_tts_summary(self):
+        """要約読み上げを切り替え"""
+        self.tts_include_summary = self.tts_summary_var.get()
+        status = "enabled" if self.tts_include_summary else "disabled"
+        print(f"[TTS] Include summary {status}")
+
+    def _set_tts_speed(self):
+        """読み上げ速度を設定"""
+        self.tts_speed = self.tts_speed_var.get()
+        print(f"[TTS] Speed set to: {self.tts_speed}x")
+
+    def _set_summary_max_lines(self):
+        """要約の最大行数を設定"""
+        self.summary_max_lines = self.summary_max_lines_var.get()
+        print(f"[VIEW] Summary max lines set to: {self.summary_max_lines}")
+        # 現在のセッションカードを再描画
+        if hasattr(self, 'session_cards'):
+            for card in self.session_cards:
+                card.update_summary_display()
+
+    def _stop_current_speech(self):
+        """現在の読み上げを中断"""
+        self.tts_stop_flag = True
+        if self.tts_process:
+            try:
+                self.tts_process.terminate()
+                self.tts_process.wait(timeout=1)
+            except:
+                pass
+            self.tts_process = None
+        print("[TTS] Speech stopped")
+
+    def speak_status_change(self, session: TerminalSession, previous_status: str):
+        """状態変化時の読み上げ"""
+        if self.tts_mode == "none":
+            return
+
+        # 前の読み上げを中断
+        self._stop_current_speech()
+
+        # 読み上げテキストを構築
+        speech_parts = []
+
+        # タイトル
+        speech_parts.append(session.display_name)
+
+        # activeからの変化の場合、完了を伝える
+        if previous_status == "active":
+            speech_parts.append("が終わりました。")
+        else:
+            speech_parts.append("。")
+
+        # 要約を含める場合
+        if self.tts_include_summary and session.summary:
+            # 要約から不要な記号を除去
+            summary = session.summary.replace("~要約中~", "")
+            summary = summary.replace("**", "").replace("#", "")
+            if summary.strip():
+                speech_parts.append(summary)
+
+        text = "".join(speech_parts)
+
+        # バックグラウンドスレッドで読み上げ
+        self.tts_stop_flag = False
+        self.tts_thread = threading.Thread(target=self._speak_thread, args=(text,), daemon=True)
+        self.tts_thread.start()
+
+    def _speak_thread(self, text: str):
+        """読み上げスレッド"""
+        if self.tts_stop_flag:
+            return
+
+        try:
+            if self.tts_mode == "apple":
+                # Apple TTS (say コマンド) - 速度指定
+                rate = int(200 * self.tts_speed)  # デフォルト200 words/min
+                self.tts_process = subprocess.Popen(
+                    ["say", "-v", "Kyoko", "-r", str(rate), text],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                self.tts_process.wait()
+
+            elif self.tts_mode == "voicevox":
+                # VOICEVOX (ずんだもん: speaker_id=3)
+                import requests
+                import re
+
+                # VOICEVOX EngineのURL（デフォルトポート50021）
+                voicevox_url = "http://localhost:50021"
+                speaker_id = 3  # ずんだもん
+
+                # テキストを句読点で分割
+                sentences = re.split(r'([。、！？])', text)
+                # 区切り文字を前の文に結合
+                merged_sentences = []
+                for i in range(0, len(sentences), 2):
+                    if i + 1 < len(sentences):
+                        merged_sentences.append(sentences[i] + sentences[i+1])
+                    elif sentences[i].strip():
+                        merged_sentences.append(sentences[i])
+
+                # 各文を順次読み上げ
+                for sentence in merged_sentences:
+                    if self.tts_stop_flag:
+                        break
+
+                    sentence = sentence.strip()
+                    if not sentence:
+                        continue
+
+                    # 音声合成クエリを作成
+                    query_response = requests.post(
+                        f"{voicevox_url}/audio_query",
+                        params={"text": sentence, "speaker": speaker_id}
+                    )
+
+                    if query_response.status_code == 200:
+                        query_json = query_response.json()
+
+                        # 速度を調整
+                        query_json["speedScale"] = self.tts_speed
+
+                        # 音声を合成
+                        synthesis_response = requests.post(
+                            f"{voicevox_url}/synthesis",
+                            params={"speaker": speaker_id},
+                            json=query_json
+                        )
+
+                        if synthesis_response.status_code == 200:
+                            # 音声データを一時ファイルに保存して再生
+                            import tempfile
+                            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                                f.write(synthesis_response.content)
+                                temp_path = f.name
+
+                            # afplay で再生
+                            self.tts_process = subprocess.Popen(
+                                ["afplay", temp_path],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL
+                            )
+                            self.tts_process.wait()
+
+                            # 一時ファイルを削除
+                            os.unlink(temp_path)
+                        else:
+                            print(f"[TTS] VOICEVOX synthesis failed: {synthesis_response.status_code}")
+                    else:
+                        print(f"[TTS] VOICEVOX query failed: {query_response.status_code}")
+
+        except Exception as e:
+            print(f"[TTS] Speech error: {e}")
+        finally:
+            self.tts_process = None
 
     def _on_card_reorder(self, session: TerminalSession, direction: str):
         """カードの並び替え"""

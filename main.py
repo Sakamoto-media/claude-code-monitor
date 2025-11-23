@@ -211,6 +211,10 @@ class ClaudeCodeController:
                                 print(f"    Initial startup: generating summary...")
                             else:
                                 print(f"    Status changed: {previous_status} -> {current_status}, generating summary...")
+                                # 状態変化時に読み上げ（起動時以外）
+                                if self.gui_window and previous_status:
+                                    self.gui_window.speak_status_change(updated_session, previous_status)
+
                             updated_session.summary = self.claude_parser.summarize(updated_session.last_output)
                             print(f"    Summary generated: {updated_session.summary[:50]}...")
                             updated_session.last_trigger_state = current_status
