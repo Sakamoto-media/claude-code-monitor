@@ -1,0 +1,23 @@
+# Claude Code Voice Controller - Requirements
+
+# GUI
+tkinter  # 標準ライブラリ（Pythonに含まれる）
+
+# 音声認識
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.13
+
+# 音声合成（macOS標準のsayコマンドを使用するため不要だが、クロスプラットフォーム用に記載）
+pyttsx3>=2.90
+
+# AppleScript実行
+PyObjC>=9.0  # macOS専用
+
+# プロセス監視
+psutil>=5.9.0
+
+# HTTP通信（Claude API用）
+anthropic>=0.18.0
+
+# ユーティリティ
+python-dotenv>=1.0.0
