@@ -1,6 +1,7 @@
 """
 縦長モニタリングウィンドウのGUI
 """
+import sys
 import tkinter as tk
 from tkinter import ttk, scrolledtext
 from typing import List, Callable, Optional
@@ -71,12 +72,12 @@ class SessionCard(tk.Frame):
             )
             progress_label.pack(side=tk.LEFT)
 
-        # 最新出力プレビュー（スクロール可能）
+        # 最新出力プレビュー（スクロールなし）
         output_frame = tk.Frame(self.content_frame, bg=COLORS["bg"], height=120)
         output_frame.pack(fill=tk.X, padx=10, pady=5)
         output_frame.pack_propagate(False)  # 子要素によるサイズ変更を防止
 
-        self.output_text = scrolledtext.ScrolledText(
+        self.output_text = tk.Text(
             output_frame,
             font=("Courier", 8),
             fg="#cccccc",
@@ -369,45 +370,79 @@ class MonitorWindow:
 
     def _build_ui(self):
         """UIを構築"""
-        # スクロール可能なセッションリスト（タイトルバーと音声コントロールバーを削除）
+        # スクロール可能なセッションリスト（標準的な構成）
         canvas_frame = tk.Frame(self.root, bg=COLORS["bg"])
         canvas_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
+        # Canvas + Scrollbar の標準構成
         self.canvas = tk.Canvas(canvas_frame, bg=COLORS["bg"], highlightthickness=0)
-        scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=self.canvas.yview)
+        scrollbar = tk.Scrollbar(canvas_frame, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=scrollbar.set)
 
+        scrollbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        # スクロール可能なフレームを作成
         self.scrollable_frame = tk.Frame(self.canvas, bg=COLORS["bg"])
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+
+        # スクロール領域の更新
         self.scrollable_frame.bind(
             "<Configure>",
             lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         )
 
-        # canvas_windowを保持してリサイズ時に幅を更新できるようにする
-        self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=scrollbar.set)
-
-        # canvasのリサイズイベントをバインド（横幅の追従）
+        # Canvasのリサイズ時に横幅を更新
         def _on_canvas_configure(event):
-            canvas_width = event.width
-            self.canvas.itemconfig(self.canvas_window, width=canvas_width)
+            self.canvas.itemconfig(self.canvas_window, width=event.width)
 
         self.canvas.bind("<Configure>", _on_canvas_configure)
 
-        self.canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # マウスホイール/トラックパッドでスクロール
+        # Tk 8.7+では、macOSトラックパッドは<TouchpadScroll>イベントを使用
+        # Tk 8.6以前およびマウスホイールは<MouseWheel>を使用
 
-        # マウスホイールでスクロール
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        # Canvasのスクロール単位を1ピクセルに設定（ピクセル単位でスムーズにスクロール）
+        self.canvas.configure(yscrollincrement=1)
+
+        # トラックパッドスクロール用のアキュムレータ（小数点以下を蓄積）
+        self._scroll_accumulator = 0.0
+
+        def _on_mousewheel(event):
+            self.canvas.yview_scroll(int(-1 * event.delta), "units")
+
+        def _on_touchpad(event):
+            # event.deltaは32bitに圧縮されたdx,dyを含む
+            dx, dy = map(int, self.root.tk.call("tk::PreciseScrollDeltas", event.delta))
+
+            # macOSでは16bit符号付き整数の-1が65535として届くので修正
+            if dy > 32767:
+                dy -= 65536
+
+            # deltaをそのままピクセル単位として扱う（dyを反転）
+            delta = -dy
+
+            # アキュムレータに蓄積
+            self._scroll_accumulator += delta
+
+            # 整数部分を取り出してスクロール
+            step = int(self._scroll_accumulator)
+            if step != 0:
+                print(f"[SCROLL-DETAIL] dx={dx}, dy={dy}, delta={delta}, accumulator={self._scroll_accumulator:.2f}, step={step}")
+                self.canvas.yview_scroll(step, "units")  # yscrollincrement=1なので1unit=1pixel
+                # 小数点以下の余りを保持
+                self._scroll_accumulator -= step
+
+        # Canvasとその子孫全てに対してスクロールイベントをバインド
+        # これによりCanvas内のどこにマウスがあってもスクロール可能
+        self.canvas.bind_all("<MouseWheel>", _on_mousewheel, add="+")
+        self.canvas.bind_all("<TouchpadScroll>", _on_touchpad, add="+")
 
         # デバッグ: 全てのクリックを検出
         self.root.bind_all("<Button-1>", lambda e: print(f"[DEBUG] Global click detected on: {e.widget.__class__.__name__} ({e.widget})"))
 
         # 定期的にフォーカス状態をチェック（5秒ごと）
         self._check_focus_periodically()
-
-    def _on_mousewheel(self, event):
-        """マウスホイールスクロール"""
-        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _check_focus_periodically(self):
         """定期的にフォーカス状態をチェック"""
