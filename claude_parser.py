@@ -2,8 +2,17 @@
 Claude Codeの出力を解析するモジュール
 """
 import re
+import json
+from pathlib import Path
 from typing import Optional, List, Dict
 from dataclasses import dataclass
+
+try:
+    from anthropic import Anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+    print("Warning: anthropic package not available. API-based summarization will be disabled.")
 
 
 @dataclass
@@ -40,6 +49,38 @@ class ClaudeOutputParser:
         'error', 'failed', 'exception', 'cannot', 'unable to',
         'エラー', '失敗', '例外', 'できません'
     ]
+
+    def __init__(self):
+        """初期化"""
+        self.api_client = None
+        self.api_config = None
+        self._load_api_config()
+
+    def _load_api_config(self):
+        """API設定を読み込み"""
+        config_path = Path(__file__).parent / "api_config.json"
+
+        if not config_path.exists():
+            print(f"API config file not found: {config_path}")
+            print("API-based summarization will be disabled. Use fallback method.")
+            return
+
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                self.api_config = json.load(f)
+
+            if ANTHROPIC_AVAILABLE and self.api_config.get('anthropic_api_key'):
+                api_key = self.api_config['anthropic_api_key']
+                if api_key and api_key != "your-api-key-here":
+                    self.api_client = Anthropic(api_key=api_key)
+                    print("Claude API client initialized successfully")
+                else:
+                    print("API key not configured. Using fallback summarization.")
+            else:
+                print("Anthropic package not available. Using fallback summarization.")
+        except Exception as e:
+            print(f"Error loading API config: {e}")
+            print("Using fallback summarization.")
 
     def parse(self, text: str) -> ClaudeResponse:
         """テキストを解析してClaudeResponseを返す"""
@@ -130,6 +171,14 @@ class ClaudeOutputParser:
         if not text:
             return "出力がありません"
 
+        # Claude APIが利用可能な場合はAPIで要約
+        if self.api_client and self.api_config:
+            try:
+                return self._summarize_with_api(text, max_length)
+            except Exception as e:
+                print(f"API summarization failed: {e}, falling back to simple method")
+                # フォールバック: シンプルな要約方法を使用
+
         # 最新の内容を優先
         lines = text.strip().split('\n')
 
@@ -181,6 +230,38 @@ class ClaudeOutputParser:
             summary = summary[:max_length - 3] + "..."
 
         return summary if summary else "処理中です。"
+
+    def _summarize_with_api(self, text: str, max_length: int = 200) -> str:
+        """Claude APIを使ってテキストを要約"""
+        # 入力テキストが長すぎる場合は最新部分のみを使用
+        if len(text) > 10000:
+            text = text[-10000:]
+
+        # APIリクエスト
+        instructions = self.api_config.get('summary_instructions',
+            "以下のClaude Codeセッションの出力を、10秒で読める程度（約150文字）に要約してください。重要なポイント、エラー、進捗状況を含めてください。")
+
+        message = self.api_client.messages.create(
+            model=self.api_config.get('model', 'claude-sonnet-4-5-20250929'),
+            max_tokens=self.api_config.get('max_tokens', 200),
+            temperature=self.api_config.get('temperature', 0.7),
+            messages=[{
+                "role": "user",
+                "content": f"{instructions}\n\n出力:\n{text}"
+            }]
+        )
+
+        # レスポンスから要約を抽出
+        if message.content and len(message.content) > 0:
+            summary = message.content[0].text.strip()
+
+            # 長さ調整
+            if len(summary) > max_length:
+                summary = summary[:max_length - 3] + "..."
+
+            return summary
+        else:
+            return "要約の生成に失敗しました"
 
 
 if __name__ == "__main__":

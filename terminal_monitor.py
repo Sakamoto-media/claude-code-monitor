@@ -19,11 +19,18 @@ class TerminalSession:
     status: str  # "active", "waiting", "idle", "error"
     todo_progress: Optional[str]  # "3/5 completed"
     last_updated: datetime
+    summary: str = ""  # Claude APIによる要約
+    previous_output: str = ""  # 前回の出力（変更検知用）
+    needs_summary: bool = False  # 要約が必要かどうか
+    last_trigger_state: str = ""  # 前回のトリガー状態（重複要約防止用）
+    display_order: int = 0  # ユーザー定義の表示順序（ドラッグ&ドロップ用）
 
     @property
     def display_name(self) -> str:
-        """表示用の名前"""
-        return f"Window {self.window_id} - Tab {self.tab_index + 1}: {self.tab_name}"
+        """表示用の名前（Claude Codeセッション用）"""
+        # シンプルにタブ名のみを表示
+        # 番号付けはGUI側で行う（Claude Codeセッションのみをカウント）
+        return self.tab_name
 
 
 class TerminalMonitor:
@@ -43,9 +50,11 @@ class TerminalMonitor:
         tell application "Terminal"
             set output to ""
             repeat with w from 1 to count of windows
+                set win_id to id of window w
                 repeat with t from 1 to count of tabs of window w
                     set tab_info to ""
-                    set tab_info to tab_info & "WINDOW:" & w & "|"
+                    set tab_info to tab_info & "WINDOW_ID:" & win_id & "|"
+                    set tab_info to tab_info & "WINDOW_INDEX:" & w & "|"
                     set tab_info to tab_info & "TAB:" & t & "|"
 
                     try
@@ -136,11 +145,16 @@ class TerminalMonitor:
                     key, value = part.split(':', 1)
                     parts[key] = value
 
-            if 'WINDOW' in parts and 'TAB' in parts:
-                window_id = int(parts['WINDOW'])
+            if 'WINDOW_ID' in parts and 'TAB' in parts:
+                window_id = int(parts['WINDOW_ID'])  # 固有ID（z-orderに依存しない）
+                window_index = int(parts['WINDOW_INDEX'])  # 現在のz-order位置
                 tab_index = int(parts['TAB']) - 1  # 0始まりに変換
                 tab_name = parts.get('NAME', 'Unknown')
                 processes = parts.get('PROCESSES', '')
+
+                # デバッグ: AppleScriptから取得した情報を詳細にログ出力
+                print(f"[TERMINAL-PARSE] Raw: WINDOW_ID={parts['WINDOW_ID']}, WINDOW_INDEX={parts['WINDOW_INDEX']}, TAB={parts['TAB']}, NAME={tab_name}")
+                print(f"[TERMINAL-PARSE] Parsed: window_id={window_id} (fixed ID), window_index={window_index} (z-order), tab_index={tab_index}")
 
                 # Claude Codeが動いているか簡易チェック（タブ名とプロセスの両方で判定）
                 is_claude = self._check_if_claude_running(tab_name) or self._check_if_claude_running(processes)
@@ -156,6 +170,7 @@ class TerminalMonitor:
                     last_updated=datetime.now()
                 )
                 sessions.append(session)
+                print(f"[TERMINAL-PARSE] Created session: {session.display_name} (window_id={window_id}, tab_index={tab_index}, is_claude={is_claude})")
 
         return sessions
 
@@ -165,17 +180,24 @@ class TerminalMonitor:
         return any(keyword in tab_name.lower() for keyword in claude_keywords)
 
     def switch_to_session(self, window_id: int, tab_index: int) -> bool:
-        """指定されたウィンドウ・タブに切り替え"""
+        """指定されたウィンドウ・タブに切り替え（バックグラウンドで実行）"""
+        print(f"[DEBUG] switch_to_session called: window_id={window_id} (fixed ID), tab_index={tab_index}")
+
+        # window_idは固有IDなので、idで検索してからindexを1に設定
+        # activate と set frontmost を削除してバックグラウンドで実行
+        # これによりTkinterウィンドウのフォーカスを維持
         script = f'''
         tell application "Terminal"
-            activate
-            set frontmost to true
+            -- 固有IDでウィンドウを検索
+            set targetWindow to first window whose id is {window_id}
 
-            -- ウィンドウを前面に
-            set index of window {window_id} to 1
+            -- ウィンドウを前面に（Terminal内での順序のみ）
+            log "Switching to window with ID " & {window_id}
+            set index of targetWindow to 1
 
             -- タブを選択（1始まり）
-            set selected of tab {tab_index + 1} of window {window_id} to true
+            log "Selecting tab " & {tab_index + 1} & " of target window"
+            set selected of tab {tab_index + 1} of targetWindow to true
 
             return "success"
         end tell
@@ -188,9 +210,18 @@ class TerminalMonitor:
                 text=True,
                 timeout=5
             )
-            return result.returncode == 0
+            print(f"[DEBUG] AppleScript result:")
+            print(f"  returncode: {result.returncode}")
+            print(f"  stdout: {result.stdout!r}")
+            print(f"  stderr: {result.stderr!r}")
+
+            success = result.returncode == 0
+            print(f"[DEBUG] switch_to_session returning: {success}")
+            return success
         except Exception as e:
-            print(f"Error switching session: {e}")
+            print(f"[ERROR] Exception in switch_to_session: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def get_tab_content(self, window_id: int, tab_index: int, line_count: int = 50) -> str:
@@ -198,7 +229,8 @@ class TerminalMonitor:
         script = f'''
         tell application "Terminal"
             try
-                set tab_contents to contents of tab {tab_index + 1} of window {window_id}
+                set targetWindow to first window whose id is {window_id}
+                set tab_contents to contents of tab {tab_index + 1} of targetWindow
                 return tab_contents
             on error errMsg
                 return "ERROR: " & errMsg
@@ -268,17 +300,52 @@ class TerminalMonitor:
 
         if not content:
             session.status = "idle"
+            print(f"[DEBUG] analyze_session_status: {session.display_name} -> idle (no content)")
             return session
 
-        # 状態判定ロジック
-        if "?" in content[-200:] or "select" in content[-200:].lower():
-            session.status = "waiting"  # 選択待ち
-        elif any(keyword in content[-200:].lower() for keyword in ['error', 'failed', 'exception']):
-            session.status = "error"
-        elif "✓" in content[-200:] or "completed" in content[-200:].lower():
+        # 状態判定ロジック（Claude Codeの実際の出力パターンに基づく）
+        # 最新の15行をチェック（実行インジケーターを確実に捕捉）
+        lines = content.split('\n')
+        recent_lines = lines[-15:] if len(lines) > 15 else lines
+        recent_content = '\n'.join(recent_lines)
+
+        # activeの判定: Claude Codeが実行中（最新の数行のみでチェック）
+        # ⏺ と ⎿ は実行中の明確なインジケーターなので、最新5行にあるかチェック
+        active_indicators = ['⏺', '⎿']
+
+        # Tool実行中のパターン（recent_contentのみでチェック）
+        tool_patterns = [
+            'Tool ran',
+            'Read(',
+            'Edit(',
+            'Write(',
+            'Bash(',
+            'Glob(',
+            'Grep(',
+            'Task(',
+        ]
+
+        # waitingの判定: 入力待ち
+        waiting_patterns = ['?', 'select', 'choose', 'which', 'option']
+
+        # デバッグ：チェック対象の内容を表示
+        print(f"[DEBUG] Checking recent_content (last {len(recent_lines)} lines, {len(recent_content)} chars):")
+        print(f"  Recent content: {recent_content!r}")
+
+        # アクティブインジケーターをチェック（最新15行）
+        found_indicators = [p for p in active_indicators if p in recent_content]
+        found_tools = [p for p in tool_patterns if p in recent_content]
+
+        if found_indicators or found_tools:
             session.status = "active"  # 実行中
+            print(f"[DEBUG] analyze_session_status: {session.display_name} -> active")
+            print(f"  Indicators: {found_indicators}, Tools: {found_tools}")
+        elif any(keyword in recent_content.lower() for keyword in waiting_patterns) or "?" in recent_content:
+            session.status = "waiting"  # 選択待ち
+            print(f"[DEBUG] analyze_session_status: {session.display_name} -> waiting")
         else:
             session.status = "idle"
+            print(f"[DEBUG] analyze_session_status: {session.display_name} -> idle (no active patterns in recent output)")
 
         # Todo進捗の抽出（簡易版）
         todo_match = re.search(r'(\d+)/(\d+)\s*(completed|tasks?)', content, re.IGNORECASE)

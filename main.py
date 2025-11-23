@@ -33,6 +33,7 @@ class ClaudeCodeController:
         self.is_running = False
         self.update_thread = None
         self.update_queue = queue.Queue()  # スレッド間通信用キュー
+        self.session_map = {}  # {(window_id, tab_index): TerminalSession} セッション永続化用
 
     def start(self):
         """アプリケーションを起動"""
@@ -113,25 +114,81 @@ class ClaudeCodeController:
                 print(f"\n[Update {iteration}] Detecting sessions...")
 
                 # セッションを再検出
-                sessions = self.terminal_monitor.detect_sessions()
-                print(f"  Found {len(sessions)} sessions")
+                new_sessions = self.terminal_monitor.detect_sessions()
+                print(f"  Found {len(new_sessions)} sessions")
 
-                # 各セッションの詳細を分析
+                # display_order順にソート（ユーザーがドラッグ&ドロップで並び替えた順序）
+                # display_orderが0の新規セッションは末尾に追加
+                new_sessions_sorted = sorted(new_sessions, key=lambda s: (s.display_order if s.display_order > 0 else 9999, s.window_id, s.tab_index))
+                print(f"  Sorted sessions by display_order:")
+                for i, s in enumerate(new_sessions_sorted):
+                    print(f"    [{i+1}] display_order={s.display_order}, window_id={s.window_id}, tab_index={s.tab_index}, name={s.display_name}")
+
+                # 各セッションの詳細を分析（Claude Codeセッションのみ）
                 updated_sessions = []
-                for i, session in enumerate(sessions):
-                    print(f"  Session {i+1}: {session.display_name} (Claude: {session.is_running_claude})")
-                    print(f"    Before analysis - Output length: {len(session.last_output)}")
+                for i, new_session in enumerate(new_sessions_sorted):
+                    # Claude Codeセッション以外はスキップ
+                    if not new_session.is_running_claude:
+                        print(f"  Session {i+1}: {new_session.display_name} (Not Claude, skipping)")
+                        continue
 
-                    if session.is_running_claude:
-                        # Claude Codeセッションは詳細分析
-                        print(f"    Analyzing session content...")
-                        updated_session = self.terminal_monitor.analyze_session_status(session)
-                        print(f"    After analysis - Status: {updated_session.status}, Output length: {len(updated_session.last_output)}")
-                        print(f"    Output preview: {updated_session.last_output[:100]!r}")
-                        updated_sessions.append(updated_session)
+                    session_key = (new_session.window_id, new_session.tab_index)
+
+                    # 既存セッションがあれば再利用
+                    if session_key in self.session_map:
+                        existing_session = self.session_map[session_key]
+                        print(f"  Session {i+1}: {new_session.display_name} (Claude: {new_session.is_running_claude}) [Reusing existing]")
+                        # 既存セッションの状態を新セッションに引き継ぐ
+                        new_session.previous_output = existing_session.previous_output
+                        new_session.summary = existing_session.summary
+                        new_session.last_trigger_state = existing_session.last_trigger_state
+                        new_session.display_order = existing_session.display_order  # 表示順序も引き継ぐ
                     else:
-                        # 通常のセッションはそのまま
-                        updated_sessions.append(session)
+                        print(f"  Session {i+1}: {new_session.display_name} (Claude: {new_session.is_running_claude}) [New session]")
+
+                    print(f"    Before analysis - Output length: {len(new_session.last_output)}")
+
+                    # Claude Codeセッションは詳細分析
+                    print(f"    Analyzing session content...")
+                    updated_session = self.terminal_monitor.analyze_session_status(new_session)
+                    print(f"    After analysis - Status: {updated_session.status}, Output length: {len(updated_session.last_output)}")
+                    print(f"    Output preview: {updated_session.last_output[:100]!r}")
+
+                    # 出力の末尾1000文字を比較（スクロール変動を無視）
+                    current_tail = updated_session.last_output[-1000:] if len(updated_session.last_output) > 1000 else updated_session.last_output
+                    previous_tail = updated_session.previous_output[-1000:] if len(updated_session.previous_output) > 1000 else updated_session.previous_output
+                    output_changed = current_tail != previous_tail
+
+                    if output_changed:
+                        print(f"    Output changed (prev: {len(updated_session.previous_output)} -> now: {len(updated_session.last_output)})")
+                        # 出力を解析して、要約が必要か判定
+                        parsed = self.claude_parser.parse(updated_session.last_output)
+
+                        # 回答完了（入力待ち状態）または選択肢がある場合のみ要約
+                        if parsed.is_waiting_input or len(parsed.options) > 0:
+                            # トリガー状態を文字列化（waiting + 選択肢数の組み合わせ）
+                            current_trigger_state = f"waiting={parsed.is_waiting_input},options={len(parsed.options)}"
+
+                            # 前回と同じトリガー状態なら要約不要
+                            if current_trigger_state == updated_session.last_trigger_state:
+                                print(f"    Trigger state unchanged ({current_trigger_state}), skipping summary")
+                            else:
+                                print(f"    Trigger detected: waiting_input={parsed.is_waiting_input}, options={len(parsed.options)}")
+                                print(f"    Generating summary...")
+                                updated_session.summary = self.claude_parser.summarize(updated_session.last_output)
+                                print(f"    Summary generated: {updated_session.summary[:50]}...")
+                                updated_session.last_trigger_state = current_trigger_state
+                        else:
+                            print(f"    No trigger detected (still processing), keeping previous summary")
+
+                        # 前回の出力を更新
+                        updated_session.previous_output = updated_session.last_output
+                    else:
+                        print(f"    Output unchanged, no summary update needed")
+
+                    # セッションマップを更新
+                    self.session_map[session_key] = updated_session
+                    updated_sessions.append(updated_session)
 
                 # デバッグ: GUI更新前の最終確認
                 print(f"  Passing {len(updated_sessions)} sessions to GUI queue:")
@@ -152,28 +209,55 @@ class ClaudeCodeController:
 
     def on_session_clicked(self, session: TerminalSession):
         """セッションがクリックされたときの処理"""
-        print(f"Switching to: {session.display_name}")
+        print(f"\n[CLICK] ===== on_session_clicked called =====")
+        print(f"  display_name: {session.display_name}")
+        print(f"  window_id: {session.window_id}")
+        print(f"  tab_index: {session.tab_index}")
+        print(f"  tab_name: {session.tab_name}")
 
+        # 現在のウィンドウフォーカス状態をチェック
+        if self.gui_window:
+            try:
+                focus_widget = self.gui_window.root.focus_get()
+                print(f"  [FOCUS] Current focus widget: {focus_widget}")
+            except Exception as e:
+                print(f"  [FOCUS] Could not get focus widget: {e}")
+
+        print(f"[CLICK] Calling switch_to_session...")
         success = self.terminal_monitor.switch_to_session(
             session.window_id,
             session.tab_index
         )
+        print(f"[CLICK] switch_to_session returned: {success}")
+
+        # フォーカスチェックのみ（強制的には奪わない）
+        if self.gui_window:
+            try:
+                focus_widget = self.gui_window.root.focus_get()
+                print(f"  [FOCUS-AFTER] Focus widget after switch: {focus_widget}")
+            except Exception as e:
+                print(f"  [FOCUS-AFTER] Could not get focus: {e}")
 
         if success:
+            print(f"[CLICK] Switch successful (background mode - GUI keeps focus)")
+
             self.gui_window.show_notification(
                 f"Switched to {session.display_name}",
                 "success"
             )
 
-            # 要約を読み上げ
-            if session.is_running_claude and self.voice_handler:
-                summary = self.claude_parser.summarize(session.last_output)
-                self.voice_handler.voice_controller.speak_async(summary)
+            # 要約を読み上げ（削除）
+            # if session.is_running_claude and self.voice_handler:
+            #     summary = self.claude_parser.summarize(session.last_output)
+            #     self.voice_handler.voice_controller.speak_async(summary)
         else:
+            print(f"[CLICK] Switch FAILED")
             self.gui_window.show_notification(
                 "Failed to switch session",
                 "error"
             )
+
+        print(f"[CLICK] ===== on_session_clicked done =====\n")
 
     def on_voice_command(self):
         """音声コマンドが要求されたときの処理"""

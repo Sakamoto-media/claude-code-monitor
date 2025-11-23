@@ -34,6 +34,9 @@ env/
 # Environment variables
 .env
 
+# API Configuration (contains secrets)
+api_config.json
+
 # Logs
 *.log
 logs/
