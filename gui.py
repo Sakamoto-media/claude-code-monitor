@@ -291,13 +291,12 @@ class SessionCard(tk.Frame):
 class MonitorWindow:
     """メインモニタリングウィンドウ"""
 
-    def __init__(self, on_session_click: Callable, on_voice_command: Optional[Callable] = None, on_reorder_complete: Optional[Callable] = None, on_force_update: Optional[Callable] = None):
+    def __init__(self, on_session_click: Callable, on_reorder_complete: Optional[Callable] = None, on_force_update: Optional[Callable] = None):
         self.root = tk.Tk()
         self.root.title(APP_NAME)
         self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
         self.root.configure(bg=COLORS["bg"])
         self.on_session_click = on_session_click
-        self.on_voice_command = on_voice_command
         self.on_reorder_complete = on_reorder_complete
         self.on_force_update = on_force_update
 
@@ -322,7 +321,6 @@ class MonitorWindow:
         self.root.after(50, _initial_focus)
 
         self.session_cards: List[SessionCard] = []
-        self.voice_listening = False
 
         self._build_ui()
 
@@ -422,33 +420,6 @@ class MonitorWindow:
 
         # 5秒後に再実行
         self.root.after(5000, self._check_focus_periodically)
-
-    def _toggle_voice_listening(self):
-        """音声入力のON/OFF切り替え"""
-        self.voice_listening = not self.voice_listening
-
-        if self.voice_listening:
-            self.voice_button.config(
-                text="🛑 音声入力停止",
-                bg=COLORS["error"]
-            )
-            self.voice_status_label.config(text="聞いています...")
-
-            if self.on_voice_command:
-                # 別スレッドで音声認識開始
-                threading.Thread(target=self._voice_listening_loop, daemon=True).start()
-        else:
-            self.voice_button.config(
-                text="🎤 音声入力開始",
-                bg=COLORS["active"]
-            )
-            self.voice_status_label.config(text="待機中")
-
-    def _voice_listening_loop(self):
-        """音声認識ループ（バックグラウンド）"""
-        while self.voice_listening:
-            if self.on_voice_command:
-                self.on_voice_command()
 
     def update_sessions(self, sessions: List[TerminalSession]):
         """セッションリストを更新（既存カードを再利用し、順序を保持）"""

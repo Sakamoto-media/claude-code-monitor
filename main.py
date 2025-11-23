@@ -18,7 +18,6 @@ sys.stderr.reconfigure(line_buffering=True)
 from config import UPDATE_INTERVAL
 from terminal_monitor import TerminalMonitor, TerminalSession
 from gui import MonitorWindow
-from voice_control import VoiceCommandHandler
 from claude_parser import ClaudeOutputParser
 
 
@@ -29,7 +28,6 @@ class ClaudeCodeController:
         self.terminal_monitor = TerminalMonitor()
         self.claude_parser = ClaudeOutputParser()
         self.gui_window = None
-        self.voice_handler = None
         self.is_running = False
         self.update_thread = None
         self.update_queue = queue.Queue()  # スレッド間通信用キュー
@@ -74,15 +72,8 @@ class ClaudeCodeController:
         # GUIウィンドウを作成
         self.gui_window = MonitorWindow(
             on_session_click=self.on_session_clicked,
-            on_voice_command=self.on_voice_command,
             on_reorder_complete=self.on_reorder_complete,
             on_force_update=self.on_force_update
-        )
-
-        # 音声コマンドハンドラー初期化
-        self.voice_handler = VoiceCommandHandler(
-            self.terminal_monitor,
-            self.gui_window
         )
 
         # 初期セッション表示
@@ -109,8 +100,6 @@ class ClaudeCodeController:
     def stop(self):
         """アプリケーションを停止"""
         self.is_running = False
-        if self.voice_handler:
-            self.voice_handler.stop()
         print("Application stopped")
 
     def _check_updates(self):
@@ -284,11 +273,6 @@ class ClaudeCodeController:
                 f"Switched to {session.display_name}",
                 "success"
             )
-
-            # 要約を読み上げ（削除）
-            # if session.is_running_claude and self.voice_handler:
-            #     summary = self.claude_parser.summarize(session.last_output)
-            #     self.voice_handler.voice_controller.speak_async(summary)
         else:
             print(f"[CLICK] Switch FAILED")
             self.gui_window.show_notification(
@@ -297,18 +281,6 @@ class ClaudeCodeController:
             )
 
         print(f"[CLICK] ===== on_session_clicked done =====\n")
-
-    def on_voice_command(self):
-        """音声コマンドが要求されたときの処理"""
-        if not self.voice_handler:
-            return
-
-        # 音声ハンドラーが既に開始されている場合はスキップ
-        if self.voice_handler.voice_controller.is_listening:
-            return
-
-        # 音声認識開始
-        self.voice_handler.start()
 
     def on_reorder_complete(self, sessions: List[TerminalSession]):
         """GUIでカードの並び替えが完了したときの処理"""
@@ -329,30 +301,10 @@ class ClaudeCodeController:
 
 def check_dependencies():
     """必要な依存関係をチェック"""
-    missing_deps = []
-
-    try:
-        import speech_recognition
-    except ImportError:
-        missing_deps.append("SpeechRecognition")
-
-    try:
-        import pyaudio
-    except ImportError:
-        missing_deps.append("pyaudio")
-
-    if missing_deps:
-        print("警告: 以下の依存関係が不足しています:")
-        for dep in missing_deps:
-            print(f"  - {dep}")
-        print("\nインストール方法:")
-        print("  pip install -r requirements.txt")
-        print("\n音声認識機能が制限される可能性があります。")
-        print("続行しますか? (y/n): ", end="")
-
-        response = input().lower()
-        if response != 'y':
-            sys.exit(1)
+    # 現在は特別な依存関係チェックは不要
+    # tkinterはPython標準ライブラリ
+    # anthropicはclaudeParserで任意
+    pass
 
 
 def main():
