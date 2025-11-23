@@ -107,7 +107,7 @@ class ClaudeOutputParser:
             "model": "claude-sonnet-4-5-20250929",
             "max_tokens": 200,
             "temperature": 0.7,
-            "summary_instructions": "以下のClaude Codeセッションの出力を、10秒で読める程度（約150文字）に要約してください。重要なポイント、エラー、進捗状況を含めてください。"
+            "summary_instructions": "以下のClaude Codeセッションの出力を、10秒で読める程度（約150文字）に要約してください。要約の時には本文以外のタイトルなど余分なものは入れないでください"
         }
 
         try:

@@ -55,10 +55,10 @@ class ClaudeCodeController:
             # analyze_session_statusを呼び出して実際の出力を取得
             analyzed_session = self.terminal_monitor.analyze_session_status(session)
 
-            # 起動時は必ず要約を生成
+            # 起動時は要約を生成せず、"~要約中~"と表示
             if analyzed_session.last_output:
-                analyzed_session.summary = self.claude_parser.summarize(analyzed_session.last_output)
-                print(f"  Initial summary generated: {analyzed_session.summary[:50]}...")
+                analyzed_session.summary = "~要約中~"
+                print(f"  Initial session marked for summarization")
 
             session_key = (analyzed_session.window_id, analyzed_session.tab_index)
             self.session_map[session_key] = analyzed_session
@@ -80,8 +80,11 @@ class ClaudeCodeController:
             api_key_configured=api_key_configured
         )
 
-        # 初期セッション表示
+        # 初期セッション表示（要約なしで即座に表示）
         self.gui_window.update_sessions(claude_sessions_sorted)
+
+        # 起動フラグ（最初の1回は必ず要約を生成）
+        self.is_first_update = True
 
         # バックグラウンド更新スレッド開始
         self.is_running = True
@@ -193,7 +196,7 @@ class ClaudeCodeController:
 
                     current_status = updated_session.status
 
-                    # 状態がidleまたはwaitingに切り替わった時のみ要約生成
+                    # 起動時は必ず要約を生成、それ以外は状態がidleまたはwaitingに切り替わった時のみ
                     status_changed_to_idle_or_waiting = (
                         previous_status != current_status and
                         (current_status == "idle" or current_status == "waiting")
@@ -202,9 +205,12 @@ class ClaudeCodeController:
                     if output_changed:
                         print(f"    Output changed (prev: {len(updated_session.previous_output)} -> now: {len(updated_session.last_output)})")
 
-                        # 状態がidleまたはwaitingに切り替わった場合のみ要約生成
-                        if status_changed_to_idle_or_waiting:
-                            print(f"    Status changed: {previous_status} -> {current_status}, generating summary...")
+                        # 起動時は必ず要約生成、それ以外は状態変化時のみ
+                        if self.is_first_update or status_changed_to_idle_or_waiting:
+                            if self.is_first_update:
+                                print(f"    Initial startup: generating summary...")
+                            else:
+                                print(f"    Status changed: {previous_status} -> {current_status}, generating summary...")
                             updated_session.summary = self.claude_parser.summarize(updated_session.last_output)
                             print(f"    Summary generated: {updated_session.summary[:50]}...")
                             updated_session.last_trigger_state = current_status
@@ -231,6 +237,11 @@ class ClaudeCodeController:
                 # キューに更新データを投入（スレッドセーフ）
                 self.update_queue.put(updated_sessions_sorted)
                 print("  Data added to update queue")
+
+                # 起動時フラグをクリア
+                if self.is_first_update:
+                    self.is_first_update = False
+                    print("  [STARTUP] First update completed, initial summaries generated")
 
             except Exception as e:
                 print(f"Error in update loop: {e}")
