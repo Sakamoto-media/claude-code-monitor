@@ -62,7 +62,17 @@ class ClaudeOutputParser:
 
         if not config_path.exists():
             print(f"API config file not found: {config_path}")
-            print("API-based summarization will be disabled. Use fallback method.")
+            print("Creating default api_config.json...")
+            self._create_default_config(config_path)
+            print("\n" + "="*60)
+            print("IMPORTANT: Claude API Key is required for summarization!")
+            print("="*60)
+            print(f"Please edit {config_path}")
+            print("and set your Claude API key in 'anthropic_api_key' field.")
+            print("\nYou can get your API key from:")
+            print("https://console.anthropic.com/")
+            print("\nUsing fallback summarization until API key is configured.")
+            print("="*60 + "\n")
             return
 
         try:
@@ -75,12 +85,37 @@ class ClaudeOutputParser:
                     self.api_client = Anthropic(api_key=api_key)
                     print("Claude API client initialized successfully")
                 else:
-                    print("API key not configured. Using fallback summarization.")
+                    print("\n" + "="*60)
+                    print("IMPORTANT: Claude API Key is not configured!")
+                    print("="*60)
+                    print(f"Please edit {config_path}")
+                    print("and set your Claude API key in 'anthropic_api_key' field.")
+                    print("\nYou can get your API key from:")
+                    print("https://console.anthropic.com/")
+                    print("\nUsing fallback summarization until API key is configured.")
+                    print("="*60 + "\n")
             else:
                 print("Anthropic package not available. Using fallback summarization.")
         except Exception as e:
             print(f"Error loading API config: {e}")
             print("Using fallback summarization.")
+
+    def _create_default_config(self, config_path: Path):
+        """デフォルトのAPI設定ファイルを作成"""
+        default_config = {
+            "anthropic_api_key": "your-api-key-here",
+            "model": "claude-sonnet-4-5-20250929",
+            "max_tokens": 200,
+            "temperature": 0.7,
+            "summary_instructions": "以下のClaude Codeセッションの出力を、10秒で読める程度（約150文字）に要約してください。重要なポイント、エラー、進捗状況を含めてください。"
+        }
+
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(default_config, f, indent=2, ensure_ascii=False)
+            print(f"Created default config file: {config_path}")
+        except Exception as e:
+            print(f"Error creating default config file: {e}")
 
     def parse(self, text: str) -> ClaudeResponse:
         """テキストを解析してClaudeResponseを返す"""

@@ -292,7 +292,7 @@ class SessionCard(tk.Frame):
 class MonitorWindow:
     """メインモニタリングウィンドウ"""
 
-    def __init__(self, on_session_click: Callable, on_reorder_complete: Optional[Callable] = None, on_force_update: Optional[Callable] = None):
+    def __init__(self, on_session_click: Callable, on_reorder_complete: Optional[Callable] = None, on_force_update: Optional[Callable] = None, api_key_configured: bool = False):
         self.root = tk.Tk()
         self.root.title(APP_NAME)
         self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
@@ -300,6 +300,7 @@ class MonitorWindow:
         self.on_session_click = on_session_click
         self.on_reorder_complete = on_reorder_complete
         self.on_force_update = on_force_update
+        self.api_key_configured = api_key_configured
 
         # macOS Tk 9.0バグ回避: ウィンドウを一旦非表示にしてから表示
         # マウスポインタがウィンドウ内にある状態で表示されると、キーウィンドウになれない
@@ -370,6 +371,82 @@ class MonitorWindow:
 
     def _build_ui(self):
         """UIを構築"""
+        # API設定エリア（APIキーが未設定の場合のみ表示）
+        if not self.api_key_configured:
+            api_config_frame = tk.Frame(self.root, bg="#2a2a2a", relief=tk.FLAT, borderwidth=1)
+            api_config_frame.pack(fill=tk.X, padx=5, pady=5)
+
+            # タイトル
+            title_label = tk.Label(
+                api_config_frame,
+                text="Claude API Configuration",
+                font=("Courier", 10, "bold"),
+                fg="#cccccc",
+                bg="#2a2a2a"
+            )
+            title_label.pack(pady=(8, 5))
+
+            info_label = tk.Label(
+                api_config_frame,
+                text="API key is required for AI-powered summarization",
+                font=("Courier", 8),
+                fg="#888888",
+                bg="#2a2a2a"
+            )
+            info_label.pack(pady=(0, 8))
+
+            # API キー入力フィールド
+            input_frame = tk.Frame(api_config_frame, bg="#2a2a2a")
+            input_frame.pack(pady=5, padx=10, fill=tk.X)
+
+            api_key_label = tk.Label(
+                input_frame,
+                text="API Key:",
+                font=("Courier", 9),
+                fg="#cccccc",
+                bg="#2a2a2a"
+            )
+            api_key_label.pack(side=tk.LEFT, padx=(0, 8))
+
+            self.api_key_entry = tk.Entry(
+                input_frame,
+                font=("Courier", 9),
+                bg="#1a1a1a",
+                fg="#00ff00",
+                insertbackground="#00ff00",
+                show="*",
+                relief=tk.FLAT,
+                borderwidth=2
+            )
+            self.api_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+
+            save_button = tk.Button(
+                input_frame,
+                text="Save",
+                font=("Courier", 9, "bold"),
+                bg="#cccccc",
+                fg="#000000",
+                activebackground="#dddddd",
+                activeforeground="#000000",
+                relief=tk.FLAT,
+                borderwidth=0,
+                padx=15,
+                command=self._save_api_key
+            )
+            save_button.pack(side=tk.LEFT)
+
+            # リンク
+            link_label = tk.Label(
+                api_config_frame,
+                text="Get API key: https://console.anthropic.com/",
+                font=("Courier", 7),
+                fg="#666666",
+                bg="#2a2a2a",
+                cursor="hand2"
+            )
+            link_label.pack(pady=(5, 8))
+            link_label.bind("<Button-1>", lambda e: self._open_url("https://console.anthropic.com/"))
+
         # スクロール可能なセッションリスト（スクロールバーなし）
         canvas_frame = tk.Frame(self.root, bg=COLORS["bg"])
         canvas_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -524,6 +601,61 @@ class MonitorWindow:
         print("[REORDER] Forcing update after reorder")
         if self.on_force_update:
             self.on_force_update()
+
+    def _save_api_key(self):
+        """APIキーを保存して再起動"""
+        import json
+        import sys
+        import os
+        from pathlib import Path
+
+        api_key = self.api_key_entry.get().strip()
+        if not api_key:
+            print("Error: API key is empty")
+            return
+
+        config_path = Path(__file__).parent / "api_config.json"
+
+        try:
+            # 既存の設定を読み込み
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            else:
+                config = {
+                    "model": "claude-sonnet-4-5-20250929",
+                    "max_tokens": 200,
+                    "temperature": 0.7,
+                    "summary_instructions": "以下のClaude Codeセッションの出力を、10秒で読める程度（約150文字）に要約してください。重要なポイント、エラー、進捗状況を含めてください。"
+                }
+
+            # APIキーを更新
+            config["anthropic_api_key"] = api_key
+
+            # 保存
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+
+            print(f"API key saved to {config_path}")
+            print("Restarting application...")
+
+            # アプリケーションを再起動
+            self.root.destroy()  # 現在のウィンドウを閉じる
+
+            # main.pyを再実行
+            python = sys.executable
+            main_script = Path(__file__).parent / "main.py"
+            os.execl(python, python, str(main_script))
+
+        except Exception as e:
+            print(f"Error saving API key: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _open_url(self, url: str):
+        """URLをブラウザで開く"""
+        import webbrowser
+        webbrowser.open(url)
 
     def run(self):
         """GUIを起動"""

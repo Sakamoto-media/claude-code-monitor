@@ -69,11 +69,15 @@ class ClaudeCodeController:
 
         self.next_display_order = len(claude_sessions_sorted) + 1
 
+        # API設定状態を確認
+        api_key_configured = self.claude_parser.api_client is not None
+
         # GUIウィンドウを作成
         self.gui_window = MonitorWindow(
             on_session_click=self.on_session_clicked,
             on_reorder_complete=self.on_reorder_complete,
-            on_force_update=self.on_force_update
+            on_force_update=self.on_force_update,
+            api_key_configured=api_key_configured
         )
 
         # 初期セッション表示
