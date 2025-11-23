@@ -50,12 +50,24 @@ class SessionCard(tk.Frame):
         self.name_label = tk.Label(
             header_frame,
             text=display_text,
-            font=("Arial", 12, "bold"),
+            font=("Arial", 10, "bold"),
             fg=COLORS["fg"],
             bg=COLORS["bg"],
             anchor="w"
         )
         self.name_label.pack(side=tk.LEFT)
+
+        # 状態表示（右上）
+        status_text = f"Status: {self.session.status}"
+        self.time_label = tk.Label(
+            header_frame,
+            text=status_text,
+            font=("Arial", 8),
+            fg="#888888",
+            bg=COLORS["bg"],
+            anchor="e"
+        )
+        self.time_label.pack(side=tk.RIGHT)
 
         # 進捗情報
         if self.session.todo_progress:
@@ -93,18 +105,6 @@ class SessionCard(tk.Frame):
         # 初期テキストを挿入（表示モードに応じて）
         self._update_output_display()
         print(f"    SessionCard created for {self.session.display_name}")
-
-        # 状態表示（Updatedは表示しない）
-        status_text = f"Status: {self.session.status}"
-        self.time_label = tk.Label(
-            self.content_frame,
-            text=status_text,
-            font=("Arial", 8),
-            fg="#888888",
-            bg=COLORS["bg"],
-            anchor="e"
-        )
-        self.time_label.pack(fill=tk.X, padx=10, pady=2)
 
     def _bind_click_events(self):
         """クリックイベントを全ての子ウィジェットにバインド"""
@@ -370,17 +370,13 @@ class MonitorWindow:
 
     def _build_ui(self):
         """UIを構築"""
-        # スクロール可能なセッションリスト（標準的な構成）
+        # スクロール可能なセッションリスト（スクロールバーなし）
         canvas_frame = tk.Frame(self.root, bg=COLORS["bg"])
         canvas_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Canvas + Scrollbar の標準構成
+        # Canvas（スクロールバーなし）
         self.canvas = tk.Canvas(canvas_frame, bg=COLORS["bg"], highlightthickness=0)
-        scrollbar = tk.Scrollbar(canvas_frame, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=scrollbar.set)
-
-        scrollbar.pack(side="right", fill="y")
-        self.canvas.pack(side="left", fill="both", expand=True)
+        self.canvas.pack(fill="both", expand=True)
 
         # スクロール可能なフレームを作成
         self.scrollable_frame = tk.Frame(self.canvas, bg=COLORS["bg"])
