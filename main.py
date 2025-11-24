@@ -80,7 +80,8 @@ class ClaudeCodeController:
             on_session_click=self.on_session_clicked,
             on_reorder_complete=self.on_reorder_complete,
             on_force_update=self.on_force_update,
-            api_key_configured=api_key_configured
+            api_key_configured=api_key_configured,
+            claude_parser=self.claude_parser
         )
 
         # 初期セッション表示（要約なしで即座に表示）

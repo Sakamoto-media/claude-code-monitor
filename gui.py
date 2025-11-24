@@ -296,7 +296,7 @@ class SessionCard(tk.Frame):
 class MonitorWindow:
     """メインモニタリングウィンドウ"""
 
-    def __init__(self, on_session_click: Callable, on_reorder_complete: Optional[Callable] = None, on_force_update: Optional[Callable] = None, api_key_configured: bool = False):
+    def __init__(self, on_session_click: Callable, on_reorder_complete: Optional[Callable] = None, on_force_update: Optional[Callable] = None, api_key_configured: bool = False, claude_parser=None):
         self.root = tk.Tk()
         self.root.title(APP_NAME)
         self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
@@ -305,6 +305,7 @@ class MonitorWindow:
         self.on_reorder_complete = on_reorder_complete
         self.on_force_update = on_force_update
         self.api_key_configured = api_key_configured
+        self.claude_parser = claude_parser
 
         # macOS Tk 9.0バグ回避: ウィンドウを一旦非表示にしてから表示
         # マウスポインタがウィンドウ内にある状態で表示されると、キーウィンドウになれない
@@ -358,6 +359,11 @@ class MonitorWindow:
                 self.tts_include_summary = gui_settings.get('tts_include_summary', True)
                 self.tts_speed = gui_settings.get('tts_speed', 1.0)
 
+                # API provider設定を読み込み
+                self.api_provider = config.get('api_provider', 'gemini')
+                self.gemini_api_key = config.get('gemini_api_key', '')
+                self.anthropic_api_key = config.get('anthropic_api_key', '')
+
                 # 最前面固定を適用
                 self.root.attributes('-topmost', self.always_on_top)
 
@@ -367,6 +373,7 @@ class MonitorWindow:
                 print(f"  tts_mode={self.tts_mode}")
                 print(f"  tts_include_summary={self.tts_include_summary}")
                 print(f"  tts_speed={self.tts_speed}")
+                print(f"  api_provider={self.api_provider}")
         except FileNotFoundError:
             print(f"[CONFIG] Config file not found, using defaults")
             self._set_default_settings()
@@ -384,6 +391,9 @@ class MonitorWindow:
         self.tts_mode = "none"
         self.tts_include_summary = True
         self.tts_speed = 1.0
+        self.api_provider = "gemini"
+        self.gemini_api_key = ""
+        self.anthropic_api_key = ""
         self.root.attributes('-topmost', self.always_on_top)
 
     def _save_settings(self):
@@ -521,6 +531,24 @@ class MonitorWindow:
             command=self._set_tts_speed
         )
 
+        # AI Providerメニュー
+        ai_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="AI Provider", menu=ai_menu)
+
+        self.api_provider_var = tk.StringVar(value=self.api_provider)
+        ai_menu.add_radiobutton(
+            label="Gemini (Free)",
+            variable=self.api_provider_var,
+            value="gemini",
+            command=self._set_api_provider
+        )
+        ai_menu.add_radiobutton(
+            label="Anthropic Claude",
+            variable=self.api_provider_var,
+            value="anthropic",
+            command=self._set_api_provider
+        )
+
     def _toggle_always_on_top(self):
         """最前面固定を切り替え"""
         self.always_on_top = self.topmost_var.get()
@@ -547,6 +575,115 @@ class MonitorWindow:
         self.tts_speed = self.tts_speed_var.get()
         print(f"[TTS] Speed set to: {self.tts_speed}x")
         self._save_settings()
+
+    def _set_api_provider(self):
+        """AI Providerを設定"""
+        new_provider = self.api_provider_var.get()
+        print(f"[API] Provider changed: {self.api_provider} -> {new_provider}")
+        self.api_provider = new_provider
+
+        # config.jsonを更新
+        try:
+            with open(self.config_file_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+
+            config['api_provider'] = new_provider
+
+            with open(self.config_file_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+
+            print(f"[API] Provider saved to config: {new_provider}")
+
+            # 選択されたプロバイダーのAPIキーをチェック
+            key_field = 'gemini_api_key' if new_provider == 'gemini' else 'anthropic_api_key'
+            api_key = config.get(key_field, '')
+
+            # APIキーが未設定または空の場合、入力欄を表示
+            if not api_key or api_key in ['your-api-key-here', 'your-gemini-api-key-here', '']:
+                print(f"[API] {new_provider} API key not configured, showing input panel")
+                self.api_key_configured = False
+                self._show_api_config_panel()
+            else:
+                print(f"[API] {new_provider} API key is configured")
+                self.api_key_configured = True
+                self._hide_api_config_panel()
+
+        except Exception as e:
+            print(f"[API] Error updating provider: {e}")
+
+    def _show_api_config_panel(self):
+        """API設定パネルを表示"""
+        # 既存のパネルがあれば削除
+        if hasattr(self, 'api_config_frame') and self.api_config_frame:
+            self.api_config_frame.destroy()
+
+        # API設定パネルを作成（入力欄を含む）
+        self.api_config_frame = tk.Frame(self.session_container, bg="#1a1a1a")
+        self.api_config_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+
+        provider_name = "Gemini" if self.api_provider == "gemini" else "Anthropic Claude"
+        provider_url = "https://aistudio.google.com/app/apikey" if self.api_provider == "gemini" else "https://console.anthropic.com/"
+
+        warning_label = tk.Label(
+            self.api_config_frame,
+            text=f"{provider_name} API key is required for AI-powered summarization",
+            font=("Arial", 11, "bold"),
+            fg="#ff6b6b",
+            bg="#1a1a1a"
+        )
+        warning_label.pack(pady=(10, 5))
+
+        input_frame = tk.Frame(self.api_config_frame, bg="#2a2a2a")
+        input_frame.pack(pady=5, padx=10, fill=tk.X)
+
+        api_key_label = tk.Label(
+            input_frame,
+            text="API Key:",
+            font=("Arial", 10),
+            fg=COLORS["text"],
+            bg="#2a2a2a"
+        )
+        api_key_label.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.api_key_entry = tk.Entry(
+            input_frame,
+            font=("Arial", 10),
+            bg="#3a3a3a",
+            fg=COLORS["text"],
+            insertbackground=COLORS["text"],
+            relief=tk.FLAT,
+            width=40
+        )
+        self.api_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+
+        save_button = tk.Button(
+            input_frame,
+            text="Save",
+            font=("Arial", 10, "bold"),
+            bg="#4a9eff",
+            fg="white",
+            relief=tk.FLAT,
+            padx=15,
+            pady=3,
+            command=self._save_api_key
+        )
+        save_button.pack(side=tk.LEFT)
+
+        link_label = tk.Label(
+            self.api_config_frame,
+            text=f"Get API key: {provider_url}",
+            font=("Arial", 9),
+            fg="#4a9eff",
+            bg="#1a1a1a",
+            cursor="hand2"
+        )
+        link_label.pack(pady=(5, 10))
+
+    def _hide_api_config_panel(self):
+        """API設定パネルを非表示"""
+        if hasattr(self, 'api_config_frame') and self.api_config_frame:
+            self.api_config_frame.destroy()
+            self.api_config_frame = None
 
     def _set_summary_area_height(self):
         """要約エリアの高さを設定"""
