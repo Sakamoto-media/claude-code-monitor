@@ -612,78 +612,132 @@ class MonitorWindow:
             print(f"[API] Error updating provider: {e}")
 
     def _show_api_config_panel(self):
-        """API設定パネルを表示"""
-        # 既存のパネルがあれば削除
-        if hasattr(self, 'api_config_frame') and self.api_config_frame:
-            self.api_config_frame.destroy()
+        """API設定パネルを表示 - GeminiとAnthropic両方の入力欄"""
+        # rootに直接パネルを作成
+        api_config_frame = tk.Frame(self.root, bg="#1a1a1a", relief=tk.RAISED, borderwidth=2)
+        api_config_frame.pack(side=tk.TOP, fill=tk.X, pady=10, padx=10)
 
-        # API設定パネルを作成（入力欄を含む）
-        self.api_config_frame = tk.Frame(self.session_container, bg="#1a1a1a")
-        self.api_config_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
-
-        provider_name = "Gemini" if self.api_provider == "gemini" else "Anthropic Claude"
-        provider_url = "https://aistudio.google.com/app/apikey" if self.api_provider == "gemini" else "https://console.anthropic.com/"
-
-        warning_label = tk.Label(
-            self.api_config_frame,
-            text=f"{provider_name} API key is required for AI-powered summarization",
-            font=("Arial", 11, "bold"),
-            fg="#ff6b6b",
+        # タイトル
+        title_label = tk.Label(
+            api_config_frame,
+            text="API Key Configuration",
+            font=("Arial", 10, "bold"),
+            fg=COLORS["fg"],
             bg="#1a1a1a"
         )
-        warning_label.pack(pady=(10, 5))
+        title_label.pack(pady=(15, 5))
 
-        input_frame = tk.Frame(self.api_config_frame, bg="#2a2a2a")
-        input_frame.pack(pady=5, padx=10, fill=tk.X)
+        info_label = tk.Label(
+            api_config_frame,
+            text="Please enter at least one API key to enable summarization",
+            font=("Arial", 8),
+            fg=COLORS["fg"],
+            bg="#1a1a1a",
+            wraplength=300,
+            justify=tk.CENTER
+        )
+        info_label.pack(pady=(0, 15))
 
-        api_key_label = tk.Label(
-            input_frame,
-            text="API Key:",
-            font=("Arial", 10),
-            fg=COLORS["text"],
+        # Gemini API Key入力欄
+        gemini_frame = tk.Frame(api_config_frame, bg="#2a2a2a", relief=tk.GROOVE, borderwidth=2)
+        gemini_frame.pack(pady=8, padx=20, fill=tk.X)
+
+        gemini_header = tk.Frame(gemini_frame, bg="#2a2a2a")
+        gemini_header.pack(fill=tk.X, padx=10, pady=(10, 5))
+
+        gemini_label = tk.Label(
+            gemini_header,
+            text="Gemini API Key (FREE)",
+            font=("Arial", 8, "bold"),
+            fg="#4ade80",
             bg="#2a2a2a"
         )
-        api_key_label.pack(side=tk.LEFT, padx=(0, 8))
+        gemini_label.pack(side=tk.LEFT)
 
-        self.api_key_entry = tk.Entry(
-            input_frame,
-            font=("Arial", 10),
-            bg="#3a3a3a",
-            fg=COLORS["text"],
-            insertbackground=COLORS["text"],
-            relief=tk.FLAT,
-            width=40
-        )
-        self.api_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-
-        save_button = tk.Button(
-            input_frame,
-            text="Save",
-            font=("Arial", 10, "bold"),
-            bg="#4a9eff",
-            fg="white",
-            relief=tk.FLAT,
-            padx=15,
-            pady=3,
-            command=self._save_api_key
-        )
-        save_button.pack(side=tk.LEFT)
-
-        link_label = tk.Label(
-            self.api_config_frame,
-            text=f"Get API key: {provider_url}",
-            font=("Arial", 9),
+        gemini_link = tk.Label(
+            gemini_header,
+            text="Get API Key →",
+            font=("Arial", 8, "underline"),
             fg="#4a9eff",
-            bg="#1a1a1a",
+            bg="#2a2a2a",
             cursor="hand2"
         )
-        link_label.pack(pady=(5, 10))
+        gemini_link.pack(side=tk.RIGHT)
+        gemini_link.bind("<Button-1>", lambda e: self._open_url("https://aistudio.google.com/app/apikey"))
 
-    def _hide_api_config_panel(self):
-        """API設定パネルを非表示"""
-        if hasattr(self, 'api_config_frame') and self.api_config_frame:
-            self.api_config_frame.destroy()
-            self.api_config_frame = None
+        self.gemini_key_entry = tk.Entry(
+            gemini_frame,
+            font=("Arial", 8),
+            bg="#3a3a3a",
+            fg=COLORS["fg"],
+            insertbackground=COLORS["fg"],
+            relief=tk.FLAT
+        )
+        self.gemini_key_entry.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        # 既存のGemini APIキーを表示
+        if self.gemini_api_key and self.gemini_api_key not in ['', 'your-gemini-api-key-here']:
+            self.gemini_key_entry.insert(0, self.gemini_api_key)
+
+        # Anthropic API Key入力欄
+        anthropic_frame = tk.Frame(api_config_frame, bg="#2a2a2a", relief=tk.GROOVE, borderwidth=2)
+        anthropic_frame.pack(pady=8, padx=20, fill=tk.X)
+
+        anthropic_header = tk.Frame(anthropic_frame, bg="#2a2a2a")
+        anthropic_header.pack(fill=tk.X, padx=10, pady=(10, 5))
+
+        anthropic_label = tk.Label(
+            anthropic_header,
+            text="Anthropic Claude API Key",
+            font=("Arial", 8, "bold"),
+            fg="#c084fc",
+            bg="#2a2a2a"
+        )
+        anthropic_label.pack(side=tk.LEFT)
+
+        anthropic_link = tk.Label(
+            anthropic_header,
+            text="Get API Key →",
+            font=("Arial", 8, "underline"),
+            fg="#4a9eff",
+            bg="#2a2a2a",
+            cursor="hand2"
+        )
+        anthropic_link.pack(side=tk.RIGHT)
+        anthropic_link.bind("<Button-1>", lambda e: self._open_url("https://console.anthropic.com/"))
+
+        self.anthropic_key_entry = tk.Entry(
+            anthropic_frame,
+            font=("Arial", 8),
+            bg="#3a3a3a",
+            fg=COLORS["fg"],
+            insertbackground=COLORS["fg"],
+            relief=tk.FLAT
+        )
+        self.anthropic_key_entry.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        # 既存のAnthropic APIキーを表示
+        if self.anthropic_api_key and self.anthropic_api_key not in ['', 'your-api-key-here']:
+            self.anthropic_key_entry.insert(0, self.anthropic_api_key)
+
+        # Saveボタン
+        save_frame = tk.Frame(api_config_frame, bg="#1a1a1a")
+        save_frame.pack(pady=20)
+
+        save_button = tk.Button(
+            save_frame,
+            text="Save & Restart",
+            font=("Arial", 8, "bold"),
+            bg="#4a9eff",
+            fg="black",
+            activebackground="#3a8eef",
+            activeforeground="black",
+            relief=tk.FLAT,
+            padx=40,
+            pady=10,
+            command=self._save_api_keys
+        )
+        save_button.pack()
 
     def _set_summary_area_height(self):
         """要約エリアの高さを設定"""
@@ -943,79 +997,7 @@ class MonitorWindow:
         """UIを構築"""
         # API設定エリア（APIキーが未設定の場合のみ表示）
         if not self.api_key_configured:
-            api_config_frame = tk.Frame(self.root, bg="#2a2a2a", relief=tk.FLAT, borderwidth=1)
-            api_config_frame.pack(fill=tk.X, padx=5, pady=5)
-
-            # タイトル
-            title_label = tk.Label(
-                api_config_frame,
-                text="Claude API Configuration",
-                font=("Courier", 10, "bold"),
-                fg="#cccccc",
-                bg="#2a2a2a"
-            )
-            title_label.pack(pady=(8, 5))
-
-            info_label = tk.Label(
-                api_config_frame,
-                text="API key is required for AI-powered summarization",
-                font=("Courier", 8),
-                fg="#888888",
-                bg="#2a2a2a"
-            )
-            info_label.pack(pady=(0, 8))
-
-            # API キー入力フィールド
-            input_frame = tk.Frame(api_config_frame, bg="#2a2a2a")
-            input_frame.pack(pady=5, padx=10, fill=tk.X)
-
-            api_key_label = tk.Label(
-                input_frame,
-                text="API Key:",
-                font=("Courier", 9),
-                fg="#cccccc",
-                bg="#2a2a2a"
-            )
-            api_key_label.pack(side=tk.LEFT, padx=(0, 8))
-
-            self.api_key_entry = tk.Entry(
-                input_frame,
-                font=("Courier", 9),
-                bg="#1a1a1a",
-                fg="#00ff00",
-                insertbackground="#00ff00",
-                show="*",
-                relief=tk.FLAT,
-                borderwidth=2
-            )
-            self.api_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-
-            save_button = tk.Button(
-                input_frame,
-                text="Save",
-                font=("Courier", 9, "bold"),
-                bg="#cccccc",
-                fg="#000000",
-                activebackground="#dddddd",
-                activeforeground="#000000",
-                relief=tk.FLAT,
-                borderwidth=0,
-                padx=15,
-                command=self._save_api_key
-            )
-            save_button.pack(side=tk.LEFT)
-
-            # リンク
-            link_label = tk.Label(
-                api_config_frame,
-                text="Get API key: https://console.anthropic.com/",
-                font=("Courier", 7),
-                fg="#666666",
-                bg="#2a2a2a",
-                cursor="hand2"
-            )
-            link_label.pack(pady=(5, 8))
-            link_label.bind("<Button-1>", lambda e: self._open_url("https://console.anthropic.com/"))
+            self._show_api_config_panel()
 
         # スクロール可能なセッションリスト（スクロールバーなし）
         canvas_frame = tk.Frame(self.root, bg=COLORS["bg"])
@@ -1172,16 +1154,20 @@ class MonitorWindow:
         if self.on_force_update:
             self.on_force_update()
 
-    def _save_api_key(self):
+    def _save_api_keys(self):
         """APIキーを保存して再起動"""
         import json
         import sys
         import os
         from pathlib import Path
 
-        api_key = self.api_key_entry.get().strip()
-        if not api_key:
-            print("Error: API key is empty")
+        # 両方のAPIキーを取得
+        gemini_key = self.gemini_key_entry.get().strip()
+        anthropic_key = self.anthropic_key_entry.get().strip()
+
+        # 少なくとも1つのキーが入力されているかチェック
+        if not gemini_key and not anthropic_key:
+            print("Error: At least one API key is required")
             return
 
         config_path = Path(__file__).parent / "config.json"
@@ -1193,24 +1179,31 @@ class MonitorWindow:
                     config = json.load(f)
             else:
                 config = {
+                    "api_provider": "gemini",
                     "model": "claude-sonnet-4-5-20250929",
                     "max_tokens": 200,
                     "temperature": 0.7,
-                    "summary_instructions": "以下のClaude Codeセッションの出力を、10秒で読める程度（約150文字）に要約してください。重要なポイント、エラー、進捗状況を含めてください。"
+                    "summary_instructions": "以下のClaude Codeセッションの出力を、10秒で読める程度（約150文字）に要約してください。要約の時には本文以外のタイトルなど余分なものは入れないでください。読みやすいように、適切な箇所で改行を入れてください（句点や意味の区切りで改行）。"
                 }
 
-            # APIキーを更新
-            config["anthropic_api_key"] = api_key
+            # APIキーを保存（入力されている場合のみ）
+            if gemini_key:
+                config["gemini_api_key"] = gemini_key
+                print(f"Gemini API key saved")
+
+            if anthropic_key:
+                config["anthropic_api_key"] = anthropic_key
+                print(f"Anthropic API key saved")
 
             # 保存
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
 
-            print(f"API key saved to {config_path}")
+            print(f"Configuration saved to {config_path}")
             print("Restarting application...")
 
             # アプリケーションを再起動
-            self.root.destroy()  # 現在のウィンドウを閉じる
+            self.root.destroy()
 
             # main.pyを再実行
             python = sys.executable

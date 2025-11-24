@@ -69,11 +69,17 @@ class ClaudeCodeController:
 
         self.next_display_order = len(claude_sessions_sorted) + 1
 
-        # API設定状態を確認（Anthropic または Gemini）
-        api_key_configured = (
-            self.claude_parser.api_client is not None or
-            self.claude_parser.gemini_model is not None
-        )
+        # API設定状態を確認（どちらか片方または両方のキーが設定されているか）
+        # 両方のAPIキーが設定されていればTrue、それ以外はFalse
+        gemini_configured = self.claude_parser.gemini_model is not None
+        anthropic_configured = self.claude_parser.api_client is not None
+
+        # 少なくとも1つのAPIキーが設定されていればTrue
+        api_key_configured = gemini_configured or anthropic_configured
+
+        print(f"[API] Gemini configured: {gemini_configured}")
+        print(f"[API] Anthropic configured: {anthropic_configured}")
+        print(f"[API] API key configured: {api_key_configured}")
 
         # GUIウィンドウを作成
         self.gui_window = MonitorWindow(
