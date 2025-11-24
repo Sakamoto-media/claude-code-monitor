@@ -12,7 +12,14 @@ try:
     ANTHROPIC_AVAILABLE = True
 except ImportError:
     ANTHROPIC_AVAILABLE = False
-    print("Warning: anthropic package not available. API-based summarization will be disabled.")
+    print("Warning: anthropic package not available.")
+
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    print("Warning: google-generativeai package not available.")
 
 
 @dataclass
@@ -53,7 +60,9 @@ class ClaudeOutputParser:
     def __init__(self):
         """初期化"""
         self.api_client = None
+        self.gemini_model = None
         self.api_config = None
+        self.api_provider = None  # 'anthropic' or 'gemini'
         self._load_api_config()
 
     def _load_api_config(self):
@@ -79,23 +88,47 @@ class ClaudeOutputParser:
             with open(config_path, 'r', encoding='utf-8') as f:
                 self.api_config = json.load(f)
 
-            if ANTHROPIC_AVAILABLE and self.api_config.get('anthropic_api_key'):
-                api_key = self.api_config['anthropic_api_key']
-                if api_key and api_key != "your-api-key-here":
-                    self.api_client = Anthropic(api_key=api_key)
-                    print("Claude API client initialized successfully")
+            # API provider設定を確認（デフォルトはgemini）
+            api_provider = self.api_config.get('api_provider', 'gemini')
+            api_initialized = False
+
+            # Gemini APIを優先的に試す
+            if api_provider == 'gemini' and GEMINI_AVAILABLE:
+                gemini_key = self.api_config.get('gemini_api_key')
+                if gemini_key and gemini_key != "your-gemini-api-key-here":
+                    try:
+                        genai.configure(api_key=gemini_key)
+                        self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+                        self.api_provider = 'gemini'
+                        print("Gemini API initialized successfully")
+                        return
+                    except Exception as e:
+                        print(f"Error initializing Gemini API: {e}")
+                        print("Falling back to Anthropic API...")
                 else:
-                    print("\n" + "="*60)
-                    print("IMPORTANT: Claude API Key is not configured!")
-                    print("="*60)
-                    print(f"Please edit {config_path}")
-                    print("and set your Claude API key in 'anthropic_api_key' field.")
-                    print("\nYou can get your API key from:")
-                    print("https://console.anthropic.com/")
-                    print("\nUsing fallback summarization until API key is configured.")
-                    print("="*60 + "\n")
-            else:
-                print("Anthropic package not available. Using fallback summarization.")
+                    print("Gemini API key not configured, trying Anthropic...")
+
+            # Anthropic APIを試す
+            if api_provider == 'anthropic' or not api_initialized:
+                if ANTHROPIC_AVAILABLE and self.api_config.get('anthropic_api_key'):
+                    api_key = self.api_config['anthropic_api_key']
+                    if api_key and api_key != "your-api-key-here":
+                        self.api_client = Anthropic(api_key=api_key)
+                        self.api_provider = 'anthropic'
+                        print("Anthropic API client initialized successfully (from config.json)")
+                        return
+
+            # どちらも利用できない場合
+            print("\n" + "="*60)
+            print("IMPORTANT: API Key is not configured!")
+            print("="*60)
+            print(f"Please edit {config_path}")
+            print("and set 'gemini_api_key' (recommended) or 'anthropic_api_key'.")
+            print("\nYou can get API keys from:")
+            print("- Gemini: https://aistudio.google.com/app/apikey (FREE)")
+            print("- Anthropic: https://console.anthropic.com/")
+            print("\nUsing fallback summarization until API key is configured.")
+            print("="*60 + "\n")
         except Exception as e:
             print(f"Error loading API config: {e}")
             print("Using fallback summarization.")
@@ -206,8 +239,8 @@ class ClaudeOutputParser:
         if not text:
             return "出力がありません"
 
-        # Claude APIが利用可能な場合はAPIで要約
-        if self.api_client and self.api_config:
+        # Claude APIまたはGemini APIが利用可能な場合はAPIで要約
+        if (self.api_client or self.gemini_model) and self.api_config:
             try:
                 return self._summarize_with_api(text, max_length)
             except Exception as e:
@@ -342,7 +375,7 @@ class ClaudeOutputParser:
             return '\n'.join(remaining_lines)
 
     def _summarize_with_api(self, text: str, max_length: int = 200) -> str:
-        """Claude APIを使ってテキストを要約"""
+        """APIを使ってテキストを要約"""
         # 前回のユーザー指示内容を除外
         text = self._remove_previous_user_input(text)
 
@@ -354,27 +387,46 @@ class ClaudeOutputParser:
         instructions = self.api_config.get('summary_instructions',
             "以下のClaude Codeセッションの出力を、10秒で読める程度（約150文字）に要約してください。重要なポイント、エラー、進捗状況を含めてください。")
 
-        message = self.api_client.messages.create(
-            model=self.api_config.get('model', 'claude-sonnet-4-5-20250929'),
-            max_tokens=self.api_config.get('max_tokens', 200),
-            temperature=self.api_config.get('temperature', 0.7),
-            messages=[{
-                "role": "user",
-                "content": f"{instructions}\n\n出力:\n{text}"
-            }]
-        )
+        if self.api_provider == 'gemini' and self.gemini_model:
+            # Gemini APIを使用
+            try:
+                prompt = f"{instructions}\n\n出力:\n{text}"
+                response = self.gemini_model.generate_content(prompt)
+                summary = response.text.strip()
 
-        # レスポンスから要約を抽出
-        if message.content and len(message.content) > 0:
-            summary = message.content[0].text.strip()
+                # 長さ調整
+                if len(summary) > max_length:
+                    summary = summary[:max_length - 3] + "..."
 
-            # 長さ調整
-            if len(summary) > max_length:
-                summary = summary[:max_length - 3] + "..."
+                return summary
+            except Exception as e:
+                raise Exception(f"Gemini API error: {e}")
 
-            return summary
+        elif self.api_provider == 'anthropic' and self.api_client:
+            # Anthropic APIを使用
+            message = self.api_client.messages.create(
+                model=self.api_config.get('model', 'claude-sonnet-4-5-20250929'),
+                max_tokens=self.api_config.get('max_tokens', 200),
+                temperature=self.api_config.get('temperature', 0.7),
+                messages=[{
+                    "role": "user",
+                    "content": f"{instructions}\n\n出力:\n{text}"
+                }]
+            )
+
+            # レスポンスから要約を抽出
+            if message.content and len(message.content) > 0:
+                summary = message.content[0].text.strip()
+
+                # 長さ調整
+                if len(summary) > max_length:
+                    summary = summary[:max_length - 3] + "..."
+
+                return summary
+            else:
+                return "要約の生成に失敗しました"
         else:
-            return "要約の生成に失敗しました"
+            raise Exception("No API client available")
 
 
 if __name__ == "__main__":
