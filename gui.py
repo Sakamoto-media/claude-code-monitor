@@ -296,7 +296,7 @@ class SessionCard(tk.Frame):
 class MonitorWindow:
     """メインモニタリングウィンドウ"""
 
-    def __init__(self, on_session_click: Callable, on_reorder_complete: Optional[Callable] = None, on_force_update: Optional[Callable] = None, api_key_configured: bool = False):
+    def __init__(self, on_session_click: Callable, on_reorder_complete: Optional[Callable] = None, on_force_update: Optional[Callable] = None, api_key_configured: bool = False, missing_packages: List[str] = None):
         self.root = tk.Tk()
         self.root.title(APP_NAME)
         self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
@@ -305,6 +305,7 @@ class MonitorWindow:
         self.on_reorder_complete = on_reorder_complete
         self.on_force_update = on_force_update
         self.api_key_configured = api_key_configured
+        self.missing_packages = missing_packages or []
 
         # macOS Tk 9.0バグ回避: ウィンドウを一旦非表示にしてから表示
         # マウスポインタがウィンドウ内にある状態で表示されると、キーウィンドウになれない
@@ -327,6 +328,9 @@ class MonitorWindow:
         self.tts_thread = None  # 読み上げスレッド
         self.tts_stop_flag = False  # 読み上げ中断フラグ
 
+        # VOICEVOX警告バナーの参照
+        self.voicevox_banner = None
+
         # メニューバーを作成
         self._create_menu_bar()
 
@@ -343,6 +347,10 @@ class MonitorWindow:
         self.session_cards: List[SessionCard] = []
 
         self._build_ui()
+
+        # 起動時にVOICEVOXモードが選択されている場合、起動チェック
+        if self.tts_mode == "voicevox":
+            self.root.after(1000, self._check_and_launch_voicevox)
 
     def _load_settings(self):
         """設定ファイルから設定を読み込む"""
@@ -531,8 +539,14 @@ class MonitorWindow:
 
     def _set_tts_mode(self):
         """読み上げモードを設定"""
-        self.tts_mode = self.tts_mode_var.get()
-        print(f"[TTS] Mode set to: {self.tts_mode}")
+        new_mode = self.tts_mode_var.get()
+        print(f"[TTS] Mode set to: {new_mode}")
+
+        # VOICEVOXが選択された場合、起動チェック
+        if new_mode == "voicevox":
+            self._check_and_launch_voicevox()
+
+        self.tts_mode = new_mode
         self._save_settings()
 
     def _toggle_tts_summary(self):
@@ -802,8 +816,62 @@ class MonitorWindow:
         # 100ms後に強制更新をトリガー
         self.root.after(100, self._force_update_after_reorder)
 
+    def _create_startup_banner(self):
+        """起動時の警告バナーを作成"""
+        # VOICEVOX Engineの状態をチェック
+        voicevox_running = False
+        try:
+            import requests
+            response = requests.get('http://localhost:50021/version', timeout=1)
+            if response.status_code == 200:
+                voicevox_running = True
+        except:
+            pass
+
+        # VOICEVOX が起動していない場合、警告バナーを表示
+        if not voicevox_running:
+            banner_frame = tk.Frame(self.root, bg="#FFA500", relief=tk.FLAT, borderwidth=0)
+            banner_frame.pack(fill=tk.X, padx=0, pady=0)
+
+            # バナーの参照を保存（後で削除できるように）
+            self.voicevox_banner = banner_frame
+
+            message_label = tk.Label(
+                banner_frame,
+                text="⚠️  VOICEVOX Engine is not running (TTS feature will be limited to Apple TTS)",
+                font=("Arial", 9),
+                fg="#000000",
+                bg="#FFA500",
+                padx=10,
+                pady=5
+            )
+            message_label.pack()
+
+            # クリックで閉じるボタン
+            close_button = tk.Button(
+                banner_frame,
+                text="×",
+                font=("Arial", 12, "bold"),
+                fg="#000000",
+                bg="#FFA500",
+                borderwidth=0,
+                padx=5,
+                command=self._close_voicevox_banner
+            )
+            close_button.place(relx=1.0, rely=0.5, anchor="e", x=-5)
+
+    def _close_voicevox_banner(self):
+        """VOICEVOX警告バナーを閉じる"""
+        if self.voicevox_banner:
+            self.voicevox_banner.pack_forget()
+            self.voicevox_banner = None
+            print("[BANNER] VOICEVOX warning banner closed")
+
     def _build_ui(self):
         """UIを構築"""
+        # インストール状況バナー（起動チェックの警告がある場合）
+        self._create_startup_banner()
+
         # API設定エリア（APIキーが未設定の場合のみ表示）
         if not self.api_key_configured:
             api_config_frame = tk.Frame(self.root, bg="#2a2a2a", relief=tk.FLAT, borderwidth=1)
@@ -950,6 +1018,10 @@ class MonitorWindow:
         # 定期的にフォーカス状態をチェック（5秒ごと）
         self._check_focus_periodically()
 
+        # 不足パッケージがある場合、インストール確認ダイアログを表示
+        if self.missing_packages:
+            self.root.after(500, self._show_package_install_dialog)
+
     def _check_focus_periodically(self):
         """定期的にフォーカス状態をチェック"""
         try:
@@ -961,6 +1033,287 @@ class MonitorWindow:
 
         # 5秒後に再実行
         self.root.after(5000, self._check_focus_periodically)
+
+    def _show_package_install_dialog(self):
+        """不足パッケージのインストール確認ダイアログを表示"""
+        import tkinter.messagebox as messagebox
+
+        print(f"[INSTALL] Showing package install dialog for: {self.missing_packages}")
+
+        packages_str = ', '.join(self.missing_packages)
+        message = f"以下のPythonパッケージが不足しています:\n\n{packages_str}\n\n自動的にインストールしますか？"
+
+        response = messagebox.askyesno(
+            "パッケージのインストール",
+            message,
+            icon='warning'
+        )
+
+        print(f"[INSTALL] User response: {response}")
+
+        if response:
+            # インストールを実行
+            print("[INSTALL] Starting package installation...")
+            self._install_packages_gui()
+        else:
+            # インストールしない場合は警告を表示
+            print("[INSTALL] User declined installation")
+            messagebox.showwarning(
+                "警告",
+                f"以下のパッケージをインストールしてください:\n\n{packages_str}\n\nコマンド:\npip3 install {' '.join(self.missing_packages)}"
+            )
+
+    def _install_packages_gui(self):
+        """GUIからパッケージをインストール"""
+        import tkinter.messagebox as messagebox
+        import queue
+
+        # インストール中ダイアログを表示
+        install_dialog = tk.Toplevel(self.root)
+        install_dialog.title("パッケージをインストール中...")
+        install_dialog.geometry("400x200")
+        install_dialog.configure(bg="#2a2a2a")
+        install_dialog.transient(self.root)
+        install_dialog.grab_set()
+
+        label = tk.Label(
+            install_dialog,
+            text="パッケージをインストールしています...\nしばらくお待ちください。",
+            font=("Arial", 12),
+            fg="#ffffff",
+            bg="#2a2a2a",
+            justify=tk.CENTER
+        )
+        label.pack(expand=True)
+
+        # queueを使ってスレッド間通信（o3推奨パターン）
+        result_queue = queue.Queue()
+
+        # 別スレッドでインストール実行
+        def install_thread(q):
+            print("[INSTALL] Installation thread started")
+            success = True
+            error_message = ""
+
+            try:
+                for package in self.missing_packages:
+                    print(f"[INSTALL] Installing {package}...")
+                    result = subprocess.run(
+                        [sys.executable, '-m', 'pip', 'install', package],
+                        capture_output=True,
+                        text=True
+                    )
+
+                    if result.returncode != 0:
+                        success = False
+                        error_message = result.stderr
+                        print(f"[INSTALL] Installation failed: {error_message}")
+                        break
+                    else:
+                        print(f"[INSTALL] {package} installed successfully")
+            except Exception as e:
+                success = False
+                error_message = str(e)
+                print(f"[INSTALL] Exception: {e}")
+
+            # 結果をqueueに入れる（ワーカースレッドからTkオブジェクトに触らない）
+            print(f"[INSTALL] Putting result in queue (success={success})")
+            q.put((success, error_message))
+
+        # ワーカースレッド開始
+        thread = threading.Thread(target=install_thread, args=(result_queue,), daemon=True)
+        thread.start()
+
+        # GUIスレッドでqueueをポーリング
+        def poll_result():
+            try:
+                success, error_message = result_queue.get_nowait()
+                # 結果を取得できたら処理
+                print(f"[INSTALL] Got result from queue (success={success})")
+                self._show_install_result(install_dialog, success, error_message)
+            except queue.Empty:
+                # まだ結果がない場合は50ms後に再チェック
+                self.root.after(50, poll_result)
+
+        # 最初のポーリング開始
+        self.root.after(50, poll_result)
+
+    def _show_install_result(self, dialog, success: bool, error_message: str):
+        """インストール結果を表示"""
+        import tkinter.messagebox as messagebox
+
+        print(f"[INSTALL] _show_install_result called (success={success})")
+
+        try:
+            dialog.destroy()
+            print("[INSTALL] Dialog destroyed")
+        except Exception as e:
+            print(f"[INSTALL] Error destroying dialog: {e}")
+
+        if success:
+            print("[INSTALL] Showing success message")
+            messagebox.showinfo(
+                "インストール完了",
+                "すべてのパッケージが正常にインストールされました。\n\nアプリケーションを再起動します..."
+            )
+            # missing_packagesをクリア
+            self.missing_packages = []
+
+            # 自動的に再起動
+            print("[INSTALL] Restarting application...")
+            self._restart_application()
+        else:
+            print("[INSTALL] Showing error message")
+            messagebox.showerror(
+                "インストール失敗",
+                f"パッケージのインストールに失敗しました:\n\n{error_message}\n\n手動でインストールしてください:\npip3 install {' '.join(self.missing_packages)}"
+            )
+
+    def _restart_application(self):
+        """アプリケーションを再起動"""
+        import os
+
+        print("[RESTART] Closing current application...")
+
+        # GUIを閉じる
+        self.root.quit()
+        self.root.destroy()
+
+        # Pythonスクリプトを再実行
+        print("[RESTART] Starting new instance...")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    def _check_and_launch_voicevox(self):
+        """VOICEVOXの起動状態をチェックして、必要に応じて起動"""
+        import tkinter.messagebox as messagebox
+
+        print("[VOICEVOX] Checking VOICEVOX Engine status...")
+
+        # VOICEVOXが起動しているかチェック
+        try:
+            import requests
+            response = requests.get('http://localhost:50021/version', timeout=2)
+            if response.status_code == 200:
+                print("[VOICEVOX] VOICEVOX Engine is already running")
+                return
+        except:
+            pass
+
+        print("[VOICEVOX] VOICEVOX Engine is not running, attempting to launch...")
+
+        # VOICEVOXアプリケーションのパスを探す
+        voicevox_paths = [
+            "/Applications/VOICEVOX.app",
+            "/Applications/VoiceVox.app",
+            "~/Applications/VOICEVOX.app",
+            "~/Applications/VoiceVox.app"
+        ]
+
+        voicevox_found = False
+        for path in voicevox_paths:
+            expanded_path = os.path.expanduser(path)
+            if os.path.exists(expanded_path):
+                print(f"[VOICEVOX] Found VOICEVOX at: {expanded_path}")
+                voicevox_found = True
+
+                # VOICEVOXを起動
+                try:
+                    subprocess.Popen(['open', '-a', expanded_path])
+                    print("[VOICEVOX] VOICEVOX launched successfully")
+
+                    # 起動を待つ（最大10秒）
+                    self._wait_for_voicevox_startup()
+                    return
+                except Exception as e:
+                    print(f"[VOICEVOX] Failed to launch VOICEVOX: {e}")
+                    messagebox.showerror(
+                        "VOICEVOX起動エラー",
+                        f"VOICEVOXの起動に失敗しました:\n\n{e}"
+                    )
+                    return
+
+        # VOICEVOXが見つからない場合
+        if not voicevox_found:
+            print("[VOICEVOX] VOICEVOX not found")
+            response = messagebox.askyesno(
+                "VOICEVOX未インストール",
+                "VOICEVOXがインストールされていません。\n\n"
+                "VOICEVOXは高品質な音声合成エンジンです。\n"
+                "ダウンロードページを開きますか？",
+                icon='warning'
+            )
+
+            if response:
+                # ブラウザでVOICEVOXのダウンロードページを開く
+                self._open_url("https://voicevox.hiroshiba.jp/")
+
+    def _wait_for_voicevox_startup(self):
+        """VOICEVOXの起動を待つ（起動中ダイアログを表示）"""
+        import tkinter.messagebox as messagebox
+
+        # 起動待機ダイアログを表示
+        wait_dialog = tk.Toplevel(self.root)
+        wait_dialog.title("VOICEVOX起動中")
+        wait_dialog.geometry("350x120")
+        wait_dialog.configure(bg="#2a2a2a")
+        wait_dialog.transient(self.root)
+        wait_dialog.resizable(False, False)
+
+        # メッセージラベル
+        message_label = tk.Label(
+            wait_dialog,
+            text="VOICEVOXを起動しています...\nしばらくお待ちください。",
+            font=("Arial", 11),
+            fg="#ffffff",
+            bg="#2a2a2a",
+            justify=tk.CENTER
+        )
+        message_label.pack(expand=True, pady=20)
+
+        max_attempts = 20  # 最大10秒（500ms × 20）
+        attempt = 0
+
+        def check_startup():
+            nonlocal attempt
+            attempt += 1
+
+            try:
+                import requests
+                response = requests.get('http://localhost:50021/version', timeout=1)
+                if response.status_code == 200:
+                    print("[VOICEVOX] VOICEVOX Engine started successfully")
+
+                    # 起動完了メッセージに変更
+                    message_label.config(
+                        text="VOICEVOXが正常に起動しました！",
+                        fg="#00ff00"
+                    )
+
+                    # 警告バナーを自動的に閉じる
+                    self._close_voicevox_banner()
+
+                    # 1秒後に自動でダイアログを閉じる
+                    self.root.after(1000, wait_dialog.destroy)
+                    return
+            except:
+                pass
+
+            if attempt < max_attempts:
+                # まだ起動していない場合は500ms後に再チェック
+                message_label.config(text=f"VOICEVOXを起動しています... ({attempt}/{max_attempts})")
+                self.root.after(500, check_startup)
+            else:
+                print("[VOICEVOX] VOICEVOX startup timeout")
+                message_label.config(
+                    text="起動に時間がかかっています。\nバックグラウンドで起動を続けます。",
+                    fg="#ffaa00"
+                )
+
+                # 3秒後にダイアログを閉じる
+                self.root.after(3000, wait_dialog.destroy)
+
+        # 最初のチェックを500ms後に開始（起動に時間がかかるため）
+        self.root.after(500, check_startup)
 
     def update_sessions(self, sessions: List[TerminalSession]):
         """セッションリストを更新（既存カードを再利用し、順序を保持）"""

@@ -15,6 +15,10 @@ from typing import List
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
+# 起動時チェックを実行
+from startup_check import run_startup_check
+startup_checker = run_startup_check()
+
 from config import UPDATE_INTERVAL
 from terminal_monitor import TerminalMonitor, TerminalSession
 from gui import MonitorWindow
@@ -77,7 +81,8 @@ class ClaudeCodeController:
             on_session_click=self.on_session_clicked,
             on_reorder_complete=self.on_reorder_complete,
             on_force_update=self.on_force_update,
-            api_key_configured=api_key_configured
+            api_key_configured=api_key_configured,
+            missing_packages=startup_checker.missing_packages if startup_checker else []
         )
 
         # 初期セッション表示（要約なしで即座に表示）

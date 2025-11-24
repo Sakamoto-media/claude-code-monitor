@@ -58,8 +58,37 @@ class ClaudeOutputParser:
 
     def _load_api_config(self):
         """API設定を読み込み"""
+        import os
+
         config_path = Path(__file__).parent / "config.json"
 
+        # 環境変数から優先的にAPIキーを取得
+        api_key_from_env = os.environ.get('ANTHROPIC_API_KEY')
+
+        if api_key_from_env and ANTHROPIC_AVAILABLE:
+            # 環境変数のAPIキーを使用
+            try:
+                self.api_client = Anthropic(api_key=api_key_from_env)
+                print("Claude API client initialized successfully (from environment variable)")
+
+                # config.jsonから他の設定を読み込み
+                if config_path.exists():
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        self.api_config = json.load(f)
+                else:
+                    # デフォルト設定を使用
+                    self.api_config = {
+                        "model": "claude-sonnet-4-5-20250929",
+                        "max_tokens": 200,
+                        "temperature": 0.7,
+                        "summary_instructions": "以下のClaude Codeセッションの出力を、10秒で読める程度（約150文字）に要約してください。要約の時には本文以外のタイトルなど余分なものは入れないでください。読みやすいように、適切な箇所で改行を入れてください（句点や意味の区切りで改行）。"
+                    }
+                return
+            except Exception as e:
+                print(f"Error initializing API client with environment variable: {e}")
+                print("Falling back to config file...")
+
+        # 環境変数にない場合、config.jsonから読み込み
         if not config_path.exists():
             print(f"API config file not found: {config_path}")
             print("Creating default config.json...")
@@ -69,6 +98,7 @@ class ClaudeOutputParser:
             print("="*60)
             print(f"Please edit {config_path}")
             print("and set your Claude API key in 'anthropic_api_key' field.")
+            print("\nOr set environment variable: ANTHROPIC_API_KEY")
             print("\nYou can get your API key from:")
             print("https://console.anthropic.com/")
             print("\nUsing fallback summarization until API key is configured.")
@@ -83,13 +113,14 @@ class ClaudeOutputParser:
                 api_key = self.api_config['anthropic_api_key']
                 if api_key and api_key != "your-api-key-here":
                     self.api_client = Anthropic(api_key=api_key)
-                    print("Claude API client initialized successfully")
+                    print("Claude API client initialized successfully (from config.json)")
                 else:
                     print("\n" + "="*60)
                     print("IMPORTANT: Claude API Key is not configured!")
                     print("="*60)
                     print(f"Please edit {config_path}")
                     print("and set your Claude API key in 'anthropic_api_key' field.")
+                    print("\nOr set environment variable: ANTHROPIC_API_KEY")
                     print("\nYou can get your API key from:")
                     print("https://console.anthropic.com/")
                     print("\nUsing fallback summarization until API key is configured.")
@@ -214,6 +245,12 @@ class ClaudeOutputParser:
                 print(f"API summarization failed: {e}, falling back to simple method")
                 # フォールバック: シンプルな要約方法を使用
 
+        # フォールバック時も前処理を統一適用（o3推奨）
+        # 1. ユーザー入力エリアを除外
+        text = self._remove_previous_user_input(text)
+        # 2. git diffのような大量の差分を除外
+        text = self._remove_large_diffs(text)
+
         # 最新の内容を優先
         lines = text.strip().split('\n')
 
@@ -292,6 +329,64 @@ class ClaudeOutputParser:
         # 区切り線が見つからない場合は元のまま返す
         return text
 
+    def _remove_large_diffs(self, text: str) -> str:
+        """
+        git diffやファイル編集の大量の差分出力を除外
+
+        Claude Codeがファイルを編集すると、大量の行番号付きdiff出力が表示される。
+        これらは要約に不要なので、連続する行番号付き行を検出して除外する。
+
+        パターン例:
+        1026
+        1027 +          print(f"...")
+        1028 +
+        1029            ...
+
+        または:
+        10 files changed, 809 insertions(+), 92 deletions(-)
+        """
+        lines = text.split('\n')
+        filtered_lines = []
+        consecutive_numbered_lines = 0
+        skip_mode = False
+
+        # git統計行のパターン (複数形式に対応)
+        # 形式1: "10 files changed, 809 insertions(+), 92 deletions(-)"
+        # 形式2: "10 files +809 -92"（簡略版）
+        git_stat_patterns = [
+            re.compile(r'^\s*\d+\s+files?\s+(?:changed|modified)', re.IGNORECASE),
+            re.compile(r'^\s*\d+\s+files?\s+[\+\-]\d+\s+[\+\-]\d+', re.IGNORECASE),
+            re.compile(r'\d+\s+insertions?\(\+\)', re.IGNORECASE),
+            re.compile(r'\d+\s+deletions?\(-\)', re.IGNORECASE)
+        ]
+
+        for line in lines:
+            # git統計行を検出（例: "10 files +809 -92"）
+            is_git_stat = any(pattern.search(line) for pattern in git_stat_patterns)
+            if is_git_stat:
+                continue  # この行をスキップ
+
+            # 行番号パターン: "    1234    " や "    1234 +  " など
+            # 行頭に空白があり、その後に数字、その後にスペースまたは + - 記号
+            if re.match(r'^\s+\d{3,}\s*[\+\-]?\s', line):
+                consecutive_numbered_lines += 1
+                # 10行以上連続したら差分ブロックと判定
+                if consecutive_numbered_lines >= 10:
+                    skip_mode = True
+                continue
+            else:
+                consecutive_numbered_lines = 0
+
+                # 差分ブロックが終わったらスキップモードを解除
+                # ただし、空行や短い行は無視（差分の間の空行かもしれない）
+                if skip_mode and len(line.strip()) > 20:
+                    skip_mode = False
+
+                if not skip_mode:
+                    filtered_lines.append(line)
+
+        return '\n'.join(filtered_lines)
+
     def _remove_previous_user_input(self, text: str) -> str:
         """
         前回のユーザー指示内容を除外（'>'で始まる段落を最後から検索して削除）
@@ -345,6 +440,9 @@ class ClaudeOutputParser:
         """Claude APIを使ってテキストを要約"""
         # 前回のユーザー指示内容を除外
         text = self._remove_previous_user_input(text)
+
+        # git diffのような大量のコード差分を除外（Claude Codeが編集結果を表示する際に出力される）
+        text = self._remove_large_diffs(text)
 
         # 入力テキストが長すぎる場合は最新部分のみを使用
         if len(text) > 10000:
