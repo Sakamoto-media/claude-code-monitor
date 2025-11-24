@@ -70,16 +70,15 @@ class ClaudeOutputParser:
         config_path = Path(__file__).parent / "config.json"
 
         if not config_path.exists():
-            print(f"API config file not found: {config_path}")
-            print("Creating default config.json...")
             self._create_default_config(config_path)
             print("\n" + "="*60)
-            print("IMPORTANT: Claude API Key is required for summarization!")
+            print("IMPORTANT: API Key is required for summarization!")
             print("="*60)
             print(f"Please edit {config_path}")
-            print("and set your Claude API key in 'anthropic_api_key' field.")
-            print("\nYou can get your API key from:")
-            print("https://console.anthropic.com/")
+            print("and set 'gemini_api_key' (recommended) or 'anthropic_api_key'.")
+            print("\nYou can get API keys from:")
+            print("- Gemini: https://aistudio.google.com/app/apikey (FREE)")
+            print("- Anthropic: https://console.anthropic.com/")
             print("\nUsing fallback summarization until API key is configured.")
             print("="*60 + "\n")
             return
@@ -100,13 +99,11 @@ class ClaudeOutputParser:
                         genai.configure(api_key=gemini_key)
                         self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
                         self.api_provider = 'gemini'
-                        print("Gemini API initialized successfully")
+                        # APIキーが設定済みの場合は成功メッセージのみ表示
                         return
                     except Exception as e:
                         print(f"Error initializing Gemini API: {e}")
                         print("Falling back to Anthropic API...")
-                else:
-                    print("Gemini API key not configured, trying Anthropic...")
 
             # Anthropic APIを試す
             if api_provider == 'anthropic' or not api_initialized:
@@ -115,7 +112,7 @@ class ClaudeOutputParser:
                     if api_key and api_key != "your-api-key-here":
                         self.api_client = Anthropic(api_key=api_key)
                         self.api_provider = 'anthropic'
-                        print("Anthropic API client initialized successfully (from config.json)")
+                        # APIキーが設定済みの場合は成功メッセージのみ表示
                         return
 
             # どちらも利用できない場合
