@@ -87,12 +87,14 @@ class SessionCard(tk.Frame):
             progress_label.pack(side=tk.LEFT)
 
         # 最新出力プレビュー（スクロールなし）
-        output_frame = tk.Frame(self.content_frame, bg=COLORS["bg"], height=120)
-        output_frame.pack(fill=tk.X, padx=10, pady=5)
-        output_frame.pack_propagate(False)  # 子要素によるサイズ変更を防止
+        # MonitorWindowから初期高さを取得
+        initial_height = self.monitor_window.summary_area_height if self.monitor_window else 120
+        self.output_frame = tk.Frame(self.content_frame, bg=COLORS["bg"], height=initial_height)
+        self.output_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.output_frame.pack_propagate(False)  # 子要素によるサイズ変更を防止
 
         self.output_text = tk.Text(
-            output_frame,
+            self.output_frame,
             font=("Courier", 8),
             fg="#cccccc",
             bg="#2a2a2a",
@@ -253,33 +255,17 @@ class SessionCard(tk.Frame):
             summary_text = '\n'.join(summary_parts)
             print(f"    Summary mode (fallback): {self.session.display_name}, showing fallback summary")
 
-        # 行数制限を適用
-        summary_text = self._truncate_to_lines(summary_text)
-
         self.output_text.insert("1.0", summary_text)
 
         # 最下部にスクロール
         self.output_text.see(tk.END)
         self.output_text.config(state=tk.DISABLED)
 
-    def _truncate_to_lines(self, text: str) -> str:
-        """テキストを指定行数に制限"""
-        if not self.monitor_window:
-            return text
-
-        max_lines = self.monitor_window.summary_max_lines
-        lines = text.split('\n')
-
-        if len(lines) <= max_lines:
-            return text
-
-        # 制限を超える場合は最大行数まで表示し、"..."を追加
-        truncated_lines = lines[:max_lines]
-        return '\n'.join(truncated_lines) + '\n...'
-
-    def update_summary_display(self):
-        """要約表示を更新（行数制限変更時に使用）"""
-        self._update_output_display()
+    def update_output_frame_height(self, height: int):
+        """要約エリアの高さを更新"""
+        if hasattr(self, 'output_frame'):
+            self.output_frame.config(height=height)
+            print(f"    Updated output_frame height for {self.session.display_name}: {height}px")
 
     def update_session(self, session: TerminalSession):
         """セッション情報を更新"""
@@ -349,7 +335,7 @@ class MonitorWindow:
         self.tts_stop_flag = False  # 読み上げ中断フラグ
 
         # 要約表示設定
-        self.summary_max_lines = 3  # 要約の最大行数（1〜10）
+        self.summary_area_height = 120  # 要約エリアの高さ（ピクセル）
 
         # メニューバーを作成
         self._create_menu_bar()
@@ -387,17 +373,17 @@ class MonitorWindow:
 
         view_menu.add_separator()
 
-        # 要約の最大行数
-        summary_lines_menu = tk.Menu(view_menu, tearoff=0)
-        view_menu.add_cascade(label="Summary Max Lines", menu=summary_lines_menu)
+        # 要約エリアの高さ
+        summary_height_menu = tk.Menu(view_menu, tearoff=0)
+        view_menu.add_cascade(label="Summary Area Height", menu=summary_height_menu)
 
-        self.summary_max_lines_var = tk.IntVar(value=3)
-        for lines in [1, 2, 3, 4, 5, 6, 8, 10]:
-            summary_lines_menu.add_radiobutton(
-                label=f"{lines} line{'s' if lines > 1 else ''}",
-                variable=self.summary_max_lines_var,
-                value=lines,
-                command=self._set_summary_max_lines
+        self.summary_height_var = tk.IntVar(value=120)
+        for height in [60, 80, 100, 120, 150, 180, 220, 260, 300]:
+            summary_height_menu.add_radiobutton(
+                label=f"{height}px",
+                variable=self.summary_height_var,
+                value=height,
+                command=self._set_summary_area_height
             )
 
         # Audioメニュー
@@ -502,14 +488,14 @@ class MonitorWindow:
         self.tts_speed = self.tts_speed_var.get()
         print(f"[TTS] Speed set to: {self.tts_speed}x")
 
-    def _set_summary_max_lines(self):
-        """要約の最大行数を設定"""
-        self.summary_max_lines = self.summary_max_lines_var.get()
-        print(f"[VIEW] Summary max lines set to: {self.summary_max_lines}")
-        # 現在のセッションカードを再描画
+    def _set_summary_area_height(self):
+        """要約エリアの高さを設定"""
+        self.summary_area_height = self.summary_height_var.get()
+        print(f"[VIEW] Summary area height set to: {self.summary_area_height}px")
+        # 現在のセッションカードの高さを更新
         if hasattr(self, 'session_cards'):
             for card in self.session_cards:
-                card.update_summary_display()
+                card.update_output_frame_height(self.summary_area_height)
 
     def _stop_current_speech(self):
         """現在の読み上げを中断"""
