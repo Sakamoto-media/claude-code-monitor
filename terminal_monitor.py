@@ -24,6 +24,7 @@ class TerminalSession:
     needs_summary: bool = False  # 要約が必要かどうか
     last_trigger_state: str = ""  # 前回のトリガー状態（重複要約防止用）
     display_order: int = 0  # ユーザー定義の表示順序（ドラッグ&ドロップ用）
+    idle_check_count: int = 0  # アイドル判定の連続カウント（activeからidleへの変化を2回チェック）
 
     @property
     def display_name(self) -> str:
@@ -322,21 +323,40 @@ class TerminalMonitor:
         # 実行中を示す文言のチェック
         has_active_keyword = '(esc to interrupt' in analysis_text
 
-        # 状態判定
+        # 状態判定（activeからidleへの変化時のみ2周期チェック）
         # 緑（active）: "(esc to interrupt" が存在
         # 黄（waiting）: 選択肢が存在
-        # グレー（idle）: それ以外
+        # グレー（idle）: それ以外（ただしactiveからの変化は2回確認）
 
-        # 選択肢がある場合は優先的にwaiting判定
+        # 選択肢がある場合は優先的にwaiting判定（即座に判定）
         if has_options:
             session.status = "waiting"  # 選択肢あり
+            session.idle_check_count = 0  # カウントリセット
             print(f"  -> waiting (found options in input area)")
         elif has_active_keyword:
+            # activeキーワードが見つかった場合、即座にactive判定
             session.status = "active"  # 実行中
+            session.idle_check_count = 0  # カウントリセット
             print(f"  -> active (found active keyword)")
         else:
-            session.status = "idle"  # それ以外
-            print(f"  -> idle (no indicators)")
+            # activeキーワードがない場合
+            # 現在activeの場合のみ、2回チェックを行う
+            if session.status == "active":
+                session.idle_check_count += 1
+                print(f"  -> idle keyword found (count: {session.idle_check_count}/2)")
+
+                # 2回連続でactiveキーワードがない場合のみidle判定
+                if session.idle_check_count >= 2:
+                    session.status = "idle"
+                    print(f"  -> idle (confirmed after 2 checks)")
+                else:
+                    # 1回目はまだactive状態を維持
+                    print(f"  -> keeping active status (waiting for 2nd check)")
+            else:
+                # 元々active以外の場合は即座にidle判定
+                session.idle_check_count = 0
+                session.status = "idle"
+                print(f"  -> idle (no indicators)")
 
         return session
 

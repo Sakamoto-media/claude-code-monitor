@@ -58,11 +58,11 @@ class ClaudeOutputParser:
 
     def _load_api_config(self):
         """API設定を読み込み"""
-        config_path = Path(__file__).parent / "api_config.json"
+        config_path = Path(__file__).parent / "config.json"
 
         if not config_path.exists():
             print(f"API config file not found: {config_path}")
-            print("Creating default api_config.json...")
+            print("Creating default config.json...")
             self._create_default_config(config_path)
             print("\n" + "="*60)
             print("IMPORTANT: Claude API Key is required for summarization!")
@@ -107,7 +107,7 @@ class ClaudeOutputParser:
             "model": "claude-sonnet-4-5-20250929",
             "max_tokens": 200,
             "temperature": 0.7,
-            "summary_instructions": "以下のClaude Codeセッションの出力を、10秒で読める程度（約150文字）に要約してください。要約の時には本文以外のタイトルなど余分なものは入れないでください"
+            "summary_instructions": "以下のClaude Codeセッションの出力を、10秒で読める程度（約150文字）に要約してください。要約の時には本文以外のタイトルなど余分なものは入れないでください。読みやすいように、適切な箇所で改行を入れてください（句点や意味の区切りで改行）。"
         }
 
         try:

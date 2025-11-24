@@ -188,16 +188,19 @@ class ClaudeCodeController:
                     previous_tail = updated_session.previous_output[-1000:] if len(updated_session.previous_output) > 1000 else updated_session.previous_output
                     output_changed = current_tail != previous_tail
 
-                    # 前回のセッション状態を取得
-                    if session_key in self.session_map:
+                    # 前回のセッション状態を取得（新規セッションの判定にも使用）
+                    is_new_session = session_key not in self.session_map
+                    if not is_new_session:
                         previous_status = self.session_map[session_key].status
                     else:
                         previous_status = None
+                        print(f"    [NEW SESSION] Detected new session, will not trigger speech")
 
                     current_status = updated_session.status
 
                     # 起動時は必ず要約を生成、それ以外は状態がidleまたはwaitingに切り替わった時のみ
                     status_changed_to_idle_or_waiting = (
+                        previous_status is not None and
                         previous_status != current_status and
                         (current_status == "idle" or current_status == "waiting")
                     )
@@ -211,13 +214,19 @@ class ClaudeCodeController:
                                 print(f"    Initial startup: generating summary...")
                             else:
                                 print(f"    Status changed: {previous_status} -> {current_status}, generating summary...")
-                                # 状態変化時に読み上げ（起動時以外）
-                                if self.gui_window and previous_status:
-                                    self.gui_window.speak_status_change(updated_session, previous_status)
 
+                            # 要約を生成
                             updated_session.summary = self.claude_parser.summarize(updated_session.last_output)
                             print(f"    Summary generated: {updated_session.summary[:50]}...")
                             updated_session.last_trigger_state = current_status
+
+                            # 要約生成完了後に読み上げ（起動時以外、かつ新規セッションでない場合のみ）
+                            if not self.is_first_update:
+                                if self.gui_window and previous_status and not is_new_session:
+                                    print(f"    [TTS] Triggering speech for status change (after summary)")
+                                    self.gui_window.speak_status_change(updated_session, previous_status)
+                                elif is_new_session:
+                                    print(f"    [TTS] Skipping speech - new session detected")
                         else:
                             print(f"    Status: {current_status} (no state change to idle/waiting), keeping previous summary")
 

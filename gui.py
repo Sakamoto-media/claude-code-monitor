@@ -9,6 +9,7 @@ from datetime import datetime
 import threading
 import subprocess
 import os
+import json
 
 from config import COLORS, WINDOW_WIDTH, WINDOW_HEIGHT, UPDATE_INTERVAL, APP_NAME
 from terminal_monitor import TerminalSession
@@ -216,15 +217,8 @@ class SessionCard(tk.Frame):
 
         # Claude APIによる要約を表示
         if self.session.summary:
-            # Claude APIで生成された要約を使用
-            summary_text = self.session.summary
-
-            # 要約に改行を追加して読みやすくする
-            # 句点（。）の後に改行を入れる
-            summary_text = summary_text.replace('。', '。\n')
-
-            # 末尾の余分な改行を削除
-            summary_text = summary_text.strip()
+            # Claude APIで生成された要約を使用（改行はそのまま保持）
+            summary_text = self.session.summary.strip()
 
             print(f"    Summary mode (API): {self.session.display_name}, showing API summary")
         else:
@@ -322,20 +316,16 @@ class MonitorWindow:
         # ドラッグ中フラグ（更新処理の一時停止用）
         self.is_any_card_dragging = False
 
-        # 最前面固定フラグ（デフォルトはTrue）
-        self.always_on_top = True
-        self.root.attributes('-topmost', True)
+        # 設定ファイルのパス
+        self.config_file_path = "config.json"
 
-        # 音声読み上げ設定
-        self.tts_mode = "none"  # "none", "apple", "voicevox"
-        self.tts_include_summary = True  # 要約まで読み上げるか
-        self.tts_speed = 1.0  # 読み上げ速度（0.5〜2.0）
+        # 設定を読み込む
+        self._load_settings()
+
+        # 音声読み上げプロセス管理
         self.tts_process = None  # 現在の読み上げプロセス
         self.tts_thread = None  # 読み上げスレッド
         self.tts_stop_flag = False  # 読み上げ中断フラグ
-
-        # 要約表示設定
-        self.summary_area_height = 120  # 要約エリアの高さ（ピクセル）
 
         # メニューバーを作成
         self._create_menu_bar()
@@ -354,6 +344,72 @@ class MonitorWindow:
 
         self._build_ui()
 
+    def _load_settings(self):
+        """設定ファイルから設定を読み込む"""
+        try:
+            with open(self.config_file_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                gui_settings = config.get('gui_settings', {})
+
+                # 各設定を読み込み（デフォルト値を指定）
+                self.always_on_top = gui_settings.get('always_on_top', True)
+                self.summary_area_height = gui_settings.get('summary_area_height', 120)
+                self.tts_mode = gui_settings.get('tts_mode', 'none')
+                self.tts_include_summary = gui_settings.get('tts_include_summary', True)
+                self.tts_speed = gui_settings.get('tts_speed', 1.0)
+
+                # 最前面固定を適用
+                self.root.attributes('-topmost', self.always_on_top)
+
+                print(f"[CONFIG] Settings loaded from {self.config_file_path}")
+                print(f"  always_on_top={self.always_on_top}")
+                print(f"  summary_area_height={self.summary_area_height}")
+                print(f"  tts_mode={self.tts_mode}")
+                print(f"  tts_include_summary={self.tts_include_summary}")
+                print(f"  tts_speed={self.tts_speed}")
+        except FileNotFoundError:
+            print(f"[CONFIG] Config file not found, using defaults")
+            self._set_default_settings()
+        except json.JSONDecodeError as e:
+            print(f"[CONFIG] Error parsing config file: {e}, using defaults")
+            self._set_default_settings()
+        except Exception as e:
+            print(f"[CONFIG] Error loading settings: {e}, using defaults")
+            self._set_default_settings()
+
+    def _set_default_settings(self):
+        """デフォルト設定を適用"""
+        self.always_on_top = True
+        self.summary_area_height = 120
+        self.tts_mode = "none"
+        self.tts_include_summary = True
+        self.tts_speed = 1.0
+        self.root.attributes('-topmost', self.always_on_top)
+
+    def _save_settings(self):
+        """設定をファイルに保存"""
+        try:
+            # 既存の設定を読み込む
+            with open(self.config_file_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+
+            # GUI設定を更新
+            config['gui_settings'] = {
+                'always_on_top': self.always_on_top,
+                'summary_area_height': self.summary_area_height,
+                'tts_mode': self.tts_mode,
+                'tts_include_summary': self.tts_include_summary,
+                'tts_speed': self.tts_speed
+            }
+
+            # ファイルに書き込み
+            with open(self.config_file_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+
+            print(f"[CONFIG] Settings saved to {self.config_file_path}")
+        except Exception as e:
+            print(f"[CONFIG] Error saving settings: {e}")
+
     def _create_menu_bar(self):
         """メニューバーを作成"""
         menubar = tk.Menu(self.root)
@@ -364,7 +420,7 @@ class MonitorWindow:
         menubar.add_cascade(label="View", menu=view_menu)
 
         # 最前面固定のチェックボックス
-        self.topmost_var = tk.BooleanVar(value=True)
+        self.topmost_var = tk.BooleanVar(value=self.always_on_top)
         view_menu.add_checkbutton(
             label="Always on Top",
             variable=self.topmost_var,
@@ -377,7 +433,7 @@ class MonitorWindow:
         summary_height_menu = tk.Menu(view_menu, tearoff=0)
         view_menu.add_cascade(label="Summary Area Height", menu=summary_height_menu)
 
-        self.summary_height_var = tk.IntVar(value=120)
+        self.summary_height_var = tk.IntVar(value=self.summary_area_height)
         for height in [60, 80, 100, 120, 150, 180, 220, 260, 300]:
             summary_height_menu.add_radiobutton(
                 label=f"{height}px",
@@ -391,7 +447,7 @@ class MonitorWindow:
         menubar.add_cascade(label="Audio", menu=audio_menu)
 
         # 読み上げモード選択
-        self.tts_mode_var = tk.StringVar(value="none")
+        self.tts_mode_var = tk.StringVar(value=self.tts_mode)
         audio_menu.add_radiobutton(
             label="No Speech",
             variable=self.tts_mode_var,
@@ -414,7 +470,7 @@ class MonitorWindow:
         audio_menu.add_separator()
 
         # 要約読み上げのチェックボックス
-        self.tts_summary_var = tk.BooleanVar(value=True)
+        self.tts_summary_var = tk.BooleanVar(value=self.tts_include_summary)
         audio_menu.add_checkbutton(
             label="Include Summary",
             variable=self.tts_summary_var,
@@ -427,7 +483,7 @@ class MonitorWindow:
         speed_menu = tk.Menu(audio_menu, tearoff=0)
         audio_menu.add_cascade(label="Speed", menu=speed_menu)
 
-        self.tts_speed_var = tk.DoubleVar(value=1.0)
+        self.tts_speed_var = tk.DoubleVar(value=self.tts_speed)
         speed_menu.add_radiobutton(
             label="0.5x (Slow)",
             variable=self.tts_speed_var,
@@ -471,22 +527,26 @@ class MonitorWindow:
         self.root.attributes('-topmost', self.always_on_top)
         status = "enabled" if self.always_on_top else "disabled"
         print(f"[WINDOW] Always on top {status}")
+        self._save_settings()
 
     def _set_tts_mode(self):
         """読み上げモードを設定"""
         self.tts_mode = self.tts_mode_var.get()
         print(f"[TTS] Mode set to: {self.tts_mode}")
+        self._save_settings()
 
     def _toggle_tts_summary(self):
         """要約読み上げを切り替え"""
         self.tts_include_summary = self.tts_summary_var.get()
         status = "enabled" if self.tts_include_summary else "disabled"
         print(f"[TTS] Include summary {status}")
+        self._save_settings()
 
     def _set_tts_speed(self):
         """読み上げ速度を設定"""
         self.tts_speed = self.tts_speed_var.get()
         print(f"[TTS] Speed set to: {self.tts_speed}x")
+        self._save_settings()
 
     def _set_summary_area_height(self):
         """要約エリアの高さを設定"""
@@ -496,6 +556,7 @@ class MonitorWindow:
         if hasattr(self, 'session_cards'):
             for card in self.session_cards:
                 card.update_output_frame_height(self.summary_area_height)
+        self._save_settings()
 
     def _stop_current_speech(self):
         """現在の読み上げを中断"""
@@ -561,9 +622,13 @@ class MonitorWindow:
                 self.tts_process.wait()
 
             elif self.tts_mode == "voicevox":
-                # VOICEVOX (ずんだもん: speaker_id=3)
+                # VOICEVOX (ずんだもん: speaker_id=3) - PyAudioで連続再生
                 import requests
                 import re
+                import tempfile
+                import wave
+                import pyaudio
+                from concurrent.futures import ThreadPoolExecutor
 
                 # VOICEVOX EngineのURL（デフォルトポート50021）
                 voicevox_url = "http://localhost:50021"
@@ -579,55 +644,115 @@ class MonitorWindow:
                     elif sentences[i].strip():
                         merged_sentences.append(sentences[i])
 
-                # 各文を順次読み上げ
-                for sentence in merged_sentences:
-                    if self.tts_stop_flag:
-                        break
+                # 空の文を除外
+                merged_sentences = [s.strip() for s in merged_sentences if s.strip()]
 
-                    sentence = sentence.strip()
-                    if not sentence:
-                        continue
-
-                    # 音声合成クエリを作成
-                    query_response = requests.post(
-                        f"{voicevox_url}/audio_query",
-                        params={"text": sentence, "speaker": speaker_id}
-                    )
-
-                    if query_response.status_code == 200:
-                        query_json = query_response.json()
-
-                        # 速度を調整
-                        query_json["speedScale"] = self.tts_speed
-
-                        # 音声を合成
-                        synthesis_response = requests.post(
-                            f"{voicevox_url}/synthesis",
-                            params={"speaker": speaker_id},
-                            json=query_json
+                def generate_audio(sentence_text):
+                    """音声を生成してWAVデータを返す"""
+                    try:
+                        # 音声合成クエリを作成
+                        query_response = requests.post(
+                            f"{voicevox_url}/audio_query",
+                            params={"text": sentence_text, "speaker": speaker_id},
+                            timeout=5
                         )
 
-                        if synthesis_response.status_code == 200:
-                            # 音声データを一時ファイルに保存して再生
-                            import tempfile
-                            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                                f.write(synthesis_response.content)
-                                temp_path = f.name
+                        if query_response.status_code == 200:
+                            query_json = query_response.json()
+                            query_json["speedScale"] = self.tts_speed
 
-                            # afplay で再生
-                            self.tts_process = subprocess.Popen(
-                                ["afplay", temp_path],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL
+                            # 音声を合成
+                            synthesis_response = requests.post(
+                                f"{voicevox_url}/synthesis",
+                                params={"speaker": speaker_id},
+                                json=query_json,
+                                timeout=10
                             )
-                            self.tts_process.wait()
 
-                            # 一時ファイルを削除
-                            os.unlink(temp_path)
-                        else:
-                            print(f"[TTS] VOICEVOX synthesis failed: {synthesis_response.status_code}")
-                    else:
-                        print(f"[TTS] VOICEVOX query failed: {query_response.status_code}")
+                            if synthesis_response.status_code == 200:
+                                return synthesis_response.content
+                    except Exception as e:
+                        print(f"[TTS] VOICEVOX generation error: {e}")
+                    return None
+
+                # PyAudioで連続再生
+                p = pyaudio.PyAudio()
+                stream = None
+
+                try:
+                    # 2つ先まで先読みして再生
+                    with ThreadPoolExecutor(max_workers=3) as executor:
+                        future_to_index = {}
+                        audio_data = {}
+
+                        # 最初の3つを先読み開始
+                        for i in range(min(3, len(merged_sentences))):
+                            if self.tts_stop_flag:
+                                break
+                            future = executor.submit(generate_audio, merged_sentences[i])
+                            future_to_index[future] = i
+
+                        # 順次再生しながら先読み
+                        for i in range(len(merged_sentences)):
+                            if self.tts_stop_flag:
+                                break
+
+                            # 次の音声生成を開始（2つ先まで）
+                            next_index = i + 3
+                            if next_index < len(merged_sentences):
+                                future = executor.submit(generate_audio, merged_sentences[next_index])
+                                future_to_index[future] = next_index
+
+                            # 現在の音声データを取得（まだ生成中なら待機）
+                            if i not in audio_data:
+                                for future in list(future_to_index.keys()):
+                                    if future_to_index[future] == i:
+                                        audio_data[i] = future.result()
+                                        del future_to_index[future]
+                                        break
+
+                            # 音声を再生
+                            wav_data = audio_data.get(i)
+                            if wav_data:
+                                # WAVデータを一時ファイルに書き込み
+                                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                                    f.write(wav_data)
+                                    temp_path = f.name
+
+                                # WAVファイルを開く
+                                wf = wave.open(temp_path, 'rb')
+
+                                # 初回のみストリームを作成
+                                if stream is None:
+                                    stream = p.open(
+                                        format=p.get_format_from_width(wf.getsampwidth()),
+                                        channels=wf.getnchannels(),
+                                        rate=wf.getframerate(),
+                                        output=True,
+                                        frames_per_buffer=1024
+                                    )
+
+                                # データを読み込んで再生
+                                chunk_size = 1024
+                                data = wf.readframes(chunk_size)
+                                while data and not self.tts_stop_flag:
+                                    stream.write(data)
+                                    data = wf.readframes(chunk_size)
+
+                                wf.close()
+
+                                # 一時ファイルを削除
+                                try:
+                                    os.unlink(temp_path)
+                                except:
+                                    pass
+
+                finally:
+                    # ストリームをクリーンアップ
+                    if stream is not None:
+                        stream.stop_stream()
+                        stream.close()
+                    p.terminate()
 
         except Exception as e:
             print(f"[TTS] Speech error: {e}")
@@ -922,7 +1047,7 @@ class MonitorWindow:
             print("Error: API key is empty")
             return
 
-        config_path = Path(__file__).parent / "api_config.json"
+        config_path = Path(__file__).parent / "config.json"
 
         try:
             # 既存の設定を読み込み
