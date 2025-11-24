@@ -69,8 +69,11 @@ class ClaudeCodeController:
 
         self.next_display_order = len(claude_sessions_sorted) + 1
 
-        # API設定状態を確認
-        api_key_configured = self.claude_parser.api_client is not None
+        # API設定状態を確認（Anthropic または Gemini）
+        api_key_configured = (
+            self.claude_parser.api_client is not None or
+            self.claude_parser.gemini_model is not None
+        )
 
         # GUIウィンドウを作成
         self.gui_window = MonitorWindow(
