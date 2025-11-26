@@ -851,6 +851,9 @@ class MonitorWindow:
                         if query_response.status_code == 200:
                             query_json = query_response.json()
                             query_json["speedScale"] = self.tts_speed
+                            # 短文の語尾切れを防ぐため、前後の無音を増やす
+                            query_json["prePhonemeLength"] = 0.3   # 前に300ms
+                            query_json["postPhonemeLength"] = 0.3  # 後ろに300ms
 
                             # 音声を合成
                             synthesis_response = requests.post(

@@ -181,18 +181,19 @@ class TerminalMonitor:
         return any(keyword in tab_name.lower() for keyword in claude_keywords)
 
     def switch_to_session(self, window_id: int, tab_index: int) -> bool:
-        """指定されたウィンドウ・タブに切り替え（バックグラウンドで実行）"""
+        """指定されたウィンドウ・タブに切り替え（ターミナルを前面に表示）"""
         print(f"[DEBUG] switch_to_session called: window_id={window_id} (fixed ID), tab_index={tab_index}")
 
-        # window_idは固有IDなので、idで検索してからindexを1に設定
-        # activate と set frontmost を削除してバックグラウンドで実行
-        # これによりTkinterウィンドウのフォーカスを維持
+        # ターミナルを前面に表示し、指定されたウィンドウとタブを選択
         script = f'''
         tell application "Terminal"
             -- 固有IDでウィンドウを検索
             set targetWindow to first window whose id is {window_id}
 
-            -- ウィンドウを前面に（Terminal内での順序のみ）
+            -- ターミナルを前面に表示
+            activate
+
+            -- ウィンドウを前面に（Terminal内での順序）
             log "Switching to window with ID " & {window_id}
             set index of targetWindow to 1
 
